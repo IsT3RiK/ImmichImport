@@ -35,6 +35,18 @@ const $progressExtra = document.getElementById("progress-extra");
 const $liveHead = document.getElementById("live-head");
 const $recap = document.getElementById("recap");
 const $logsFold = document.getElementById("logs-fold");
+const $langBtn = document.getElementById("lang-btn");
+const $langMenu = document.getElementById("lang-menu");
+const $langCurrent = document.getElementById("lang-current");
+
+// ---- i18n bindings --------------------------------------------------------
+// Short aliases over the global I18N module (defined in i18n.js). `t` is the
+// translator; the retained-state vars below let relocalize() re-render every
+// dynamic surface when the language changes at runtime (no page reload).
+const t = (key, params) => I18N.t(key, params);
+let lastCfg = null;        // last /api/config, to re-render the meta bar
+let lastFolders = null;    // last job folders, to re-render the running panel
+let lastStatus = null;     // { key, params, cls } | { raw, cls } for the status line
 
 // ---- disk hot-plug detection ----------------------------------------------
 // Poll /api/status; when the disk appears/disappears, refresh the tree so the
@@ -50,7 +62,7 @@ async function pollDisk() {
     st = null;
   }
   if (!st) {
-    setDiskUi(false, "Backend injoignable…");
+    setDiskUi(false, t("disk.backendUnreachable"));
     return;
   }
   renderDiskDot(st);
@@ -72,9 +84,7 @@ async function pollDisk() {
         checkResume();
       }
     } else {
-      setDiskUi(false,
-        "💾 Aucun disque détecté. Branche le disque externe sur le NAS — " +
-        "il apparaîtra ici automatiquement.");
+      setDiskUi(false, t("disk.none"));
       // Can't resume without the disk: hide the prompt until it returns.
       hideResume();
       if (!first && !running) {
@@ -91,11 +101,11 @@ function renderDiskDot(st) {
   if (st.present) {
     $diskDot.className = "disk-dot ok";
     $diskDot.title = mounts
-      ? `${mounts} disque(s) monté(s)`
-      : "Contenu détecté sous la racine";
+      ? t("disk.mounted", { count: mounts })
+      : t("disk.contentDetected");
   } else {
     $diskDot.className = "disk-dot off";
-    $diskDot.title = "Aucun disque détecté";
+    $diskDot.title = t("disk.noneShort");
   }
 }
 
@@ -134,24 +144,21 @@ async function checkResume() {
   }
   // Reflect the persisted mode: resuming keeps the job's original dry-run flag.
   $dryRun.checked = !!r.dryRun;
-  const dryNote = r.dryRun
-    ? ` <b>🧪 (mode simulation)</b>`
-    : "";
-  const when = r.updatedAt
-    ? new Date(r.updatedAt * 1000).toLocaleString()
-    : "date inconnue";
+  const dryNote = r.dryRun ? ` <b>🧪 ${t("resume.simMode")}</b>` : "";
+  const when = r.updatedAt ? I18N.date(r.updatedAt) : t("resume.unknownDate");
   const pending = (r.folders || [])
     .filter((f) => f.status !== "done")
-    .map((f) => (f.path === "" ? "&lt;racine&gt;" : escapeHtml(f.path)));
+    .map((f) => (f.path === "" ? t("common.root") : escapeHtml(f.path)));
   const listed = pending.slice(0, 8).map((p) => `<li>${p}</li>`).join("");
-  const more = pending.length > 8 ? `<li>… +${pending.length - 8}</li>` : "";
+  const more = pending.length > 8
+    ? `<li>${t("resume.more", { count: pending.length - 8 })}</li>`
+    : "";
   $resumeDetail.innerHTML =
-    `Un import a été interrompu (${escapeHtml(when)}).${dryNote} ` +
-    `<b>${r.done}/${r.total}</b> dossier(s) déjà terminé(s), ` +
-    `<b>${r.remaining}</b> restant(s) :` +
+    t("resume.intro", { when: escapeHtml(when) }) + dryNote + " " +
+    t("resume.done", { done: r.done, total: r.total, count: r.done }) + ", " +
+    t("resume.remaining", { remaining: r.remaining, count: r.remaining }) + " :" +
     `<ul>${listed}${more}</ul>` +
-    `Reprendre ne retraite que les dossiers restants ` +
-    `(immich-go saute les fichiers déjà envoyés).`;
+    t("resume.outro");
   $resumePrompt.hidden = false;
 }
 
@@ -164,12 +171,12 @@ $resumeGo.addEventListener("click", async () => {
   hideResume();
   setRunning(true);
   startStats($dryRun.checked);
-  setStatus("Reprise de l'import…", "run");
+  setStatusKey("status.resuming", "run");
   try {
     const r = await fetch("/api/import/resume", { method: "POST" });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      setStatus("Erreur : " + (e.detail || r.status), "err");
+      setStatusKey("status.error", "err", { msg: e.detail || r.status });
       setRunning(false);
       $resumeGo.disabled = false;
       return;
@@ -177,7 +184,7 @@ $resumeGo.addEventListener("click", async () => {
     const { jobId } = await r.json();
     streamJob(jobId);
   } catch (e) {
-    setStatus("Erreur réseau : " + e, "err");
+    setStatusKey("status.networkError", "err", { msg: String(e) });
     setRunning(false);
   } finally {
     $resumeGo.disabled = false;
@@ -191,7 +198,7 @@ $resumeDiscard.addEventListener("click", async () => {
     /* ignore */
   }
   hideResume();
-  setStatus("Import précédent abandonné. Nouvelle sélection possible.", "");
+  setStatusKey("status.discarded", "");
 });
 
 // ---- recursive-count fetch queue (throttled) ------------------------------
@@ -259,12 +266,12 @@ function makeNode(child, parentPath) {
 
   const counts = document.createElement("span");
   counts.className = "badge badge-direct";
-  counts.title = "Dans CE dossier uniquement (fichiers posés directement, hors sous-dossiers)";
+  counts.title = t("badge.directTitle");
   counts.innerHTML = badgeInner(child.photos, child.videos);
 
   const rec = document.createElement("span");
   rec.className = "badge badge-total";
-  rec.title = "TOTAL récursif : ce dossier + tous ses sous-dossiers (ce qu'immich-go importera)";
+  rec.title = t("badge.totalTitle");
   rec.innerHTML = `<span class="sig">Σ</span> …`;
 
   row.append(twisty, box, folder, name, spacer, counts, rec);
@@ -277,7 +284,7 @@ function makeNode(child, parentPath) {
     path, name: child.name, checked: false, indeterminate: false,
     childrenLoaded: false, hasChildren: child.hasChildren,
     parent: parentPath, el: wrap, boxEl: box, rowEl: row, folderEl: folder,
-    childrenEl, twistyEl: twisty, recEl: rec,
+    childrenEl, twistyEl: twisty, recEl: rec, countEl: counts,
   };
   nodes.set(path, node);
 
@@ -417,12 +424,12 @@ function refreshSelection() {
   if (running) return;
   const sel = collectSelection();
   if (!sel.length) {
-    $selection.textContent = "Aucun dossier sélectionné.";
+    $selection.textContent = t("selection.none");
     $import.disabled = true || running;
     return;
   }
-  const items = sel.map((p) => `<li>${p === "" ? "&lt;racine&gt;" : escapeHtml(p)}</li>`).join("");
-  $selection.innerHTML = `<b>${sel.length}</b> dossier(s) à importer :<ul>${items}</ul>`;
+  const items = sel.map((p) => `<li>${p === "" ? t("common.root") : escapeHtml(p)}</li>`).join("");
+  $selection.innerHTML = t("selection.toImport", { count: sel.length }) + `<ul>${items}</ul>`;
   $import.disabled = running;
 }
 
@@ -525,15 +532,16 @@ function startStats(dryRun) {
 // "preparing" state when null). Replaces the old client-side log parsing.
 function applyProgress(p) {
   if (!S.active) return;
+  S.lastProgress = p; // retained so relocalize() can re-render on language change
   if (!p) {
     $progress.classList.add("working", "indeterminate");
     $progressFill.style.width = "0%";
-    $progressPct.textContent = "Préparation…";
+    $progressPct.textContent = t("progress.preparing");
     $progressStats.innerHTML = "";
     $progressExtra.textContent = "";
     $liveHead.innerHTML =
-      `<span class="spinner"></span><span class="live-phase">Démarrage…</span>` +
-      `<span class="live-badge"><span class="live-dot"></span>En cours</span>`;
+      `<span class="spinner"></span><span class="live-phase">${t("progress.starting")}</span>` +
+      `<span class="live-badge"><span class="live-dot"></span>${t("live.badge")}</span>`;
     return;
   }
   // Prefer our exact tree total for the % and remaining count; fall back to
@@ -549,15 +557,15 @@ function applyProgress(p) {
   $progressPct.textContent =
     (S.expectedTotal > 0 || p.found > 0)
       ? pct + " %"
-      : "Préparation… (lecture de l'index Immich)";
+      : t("progress.preparingIndex");
   const foundLabel = S.expectedTotal > 0 ? S.expectedTotal : p.found;
   $progressStats.innerHTML =
-    chip("📤", "envoyées", p.uploaded) +
-    chip("🔁", "doublons", p.dupsEstimated ? "≈ " + p.dups : p.dups,
+    chip("📤", t("chip.uploaded"), p.uploaded) +
+    chip("🔁", t("chip.dups"), p.dupsEstimated ? "≈ " + I18N.n(p.dups) : p.dups,
       p.dupsEstimated ? "est" : "") +
-    chip("⚠️", "erreurs", p.errors, p.errors > 0 ? "err" : "") +
-    chip("⏳", "restantes", remaining) +
-    chip("📦", "à importer", foundLabel);
+    chip("⚠️", t("chip.errors"), p.errors, p.errors > 0 ? "err" : "") +
+    chip("⏳", t("chip.remaining"), remaining) +
+    chip("📦", t("chip.toImport"), foundLabel);
   updateLiveHead(p, remaining);
 }
 
@@ -592,13 +600,13 @@ function updateLiveHead(p, remaining) {
   }
   let phase, indeterminate = false;
   if (p.readPct < 100 && p.found > 0 && (p.uploaded || 0) === 0) {
-    phase = `🔎 Analyse du dossier… (${p.readPct}% lu)`;
+    phase = t("phase.scanning", { pct: p.readPct });
     indeterminate = true;
   } else if (S.flatTicks >= 3 && remaining > 0) {
-    phase = "🔎 Vérification des doublons…";
+    phase = t("phase.dedup");
     indeterminate = true;
   } else {
-    phase = S.dryRun ? "🧪 Simulation en cours…" : "📤 Transfert en cours…";
+    phase = S.dryRun ? t("phase.simulating") : t("phase.transferring");
   }
   $progress.classList.add("working");
   $progress.classList.toggle("indeterminate", indeterminate);
@@ -607,23 +615,24 @@ function updateLiveHead(p, remaining) {
     : "";
   $liveHead.innerHTML =
     `<span class="spinner"></span><span class="live-phase">${phase}</span>${folder}` +
-    `<span class="live-badge"><span class="live-dot"></span>En cours</span>`;
+    `<span class="live-badge"><span class="live-dot"></span>${t("live.badge")}</span>`;
   // ETA from the processed-rate against the exact remaining count; show the
   // upload rate separately when files are actively being sent.
   let extra = "";
   const etaRate = S.procRate > 0 ? S.procRate : S.rate;
   if (remaining > 0 && etaRate > 0) {
-    extra = `reste ~${fmtDuration(remaining / etaRate)}`;
-    if (S.rate > 0 && S.flatTicks < 3) extra += ` · ≈ ${Math.round(S.rate)} /s`;
+    extra = t("eta.remaining", { time: fmtDuration(remaining / etaRate) });
+    if (S.rate > 0 && S.flatTicks < 3) extra += " · " + t("eta.rate", { rate: Math.round(S.rate) });
   } else if (S.rate > 0 && S.flatTicks < 3) {
-    extra = `≈ ${Math.round(S.rate)} /s`;
+    extra = t("eta.rate", { rate: Math.round(S.rate) });
   }
   $progressExtra.textContent = extra;
 }
 
 function chip(icon, label, val, cls) {
+  const shown = typeof val === "number" ? I18N.n(val) : val;
   return `<span class="stat-chip ${cls || ""}"><span class="ic">${icon}</span>` +
-    `<b>${val}</b> <span class="lbl">${label}</span></span>`;
+    `<b>${shown}</b> <span class="lbl">${label}</span></span>`;
 }
 
 function fmtDuration(secs) {
@@ -631,49 +640,58 @@ function fmtDuration(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   const s = secs % 60;
-  if (h) return `${h} h ${String(m).padStart(2, "0")} min ${String(s).padStart(2, "0")} s`;
-  if (m) return `${m} min ${String(s).padStart(2, "0")} s`;
-  return `${s} s`;
+  const uh = t("dur.h"), um = t("dur.min"), us = t("dur.s");
+  if (h) return `${h} ${uh} ${String(m).padStart(2, "0")} ${um} ${String(s).padStart(2, "0")} ${us}`;
+  if (m) return `${m} ${um} ${String(s).padStart(2, "0")} ${us}`;
+  return `${s} ${us}`;
 }
 
 function recapRow(label, val) {
-  return `<div class="recap-row"><span>${label}</span><b>${val}</b></div>`;
+  const shown = typeof val === "number" ? I18N.n(val) : val;
+  return `<div class="recap-row"><span>${label}</span><b>${shown}</b></div>`;
 }
 
 function finishStats(d) {
   if (!S.active) return;
   S.active = false;
-  const p = (d && d.progress) || {};
-  const serverDup = p.serverDup || 0;
-  const localDup = p.localDup || 0;
-  const dups = p.dups != null ? p.dups : serverDup + localDup;
   let secs;
   if (d && d.startedAt && d.endedAt) secs = Math.max(0, d.endedAt - d.startedAt);
   else secs = (Date.now() - S.startTs) / 1000;
   $progressFill.style.width = "100%";
   $progress.classList.remove("working", "indeterminate");
   $progress.hidden = true; // stop the spinner; the recap card takes over
-  const head = ({
-    success: "✅ Import terminé",
-    error: "❌ Terminé avec des erreurs",
-    cancelled: "⏹ Import annulé",
-    interrupted: "⏸ Import interrompu (disque débranché)",
-  })[d && d.status] || "Import terminé";
+  // Retain the result so relocalize() can re-render the recap in a new language
+  // without recomputing the timings.
+  S.recapData = d;
+  S.recapSecs = secs;
+  S.recapDry = S.dryRun;
+  renderRecap();
+}
+
+function renderRecap() {
+  const d = S.recapData;
+  const p = (d && d.progress) || {};
+  const serverDup = p.serverDup || 0;
+  const localDup = p.localDup || 0;
+  const dups = p.dups != null ? p.dups : serverDup + localDup;
+  const statusKey =
+    ["success", "error", "cancelled", "interrupted"].includes(d && d.status)
+      ? d.status : "default";
+  const head = t("recap.head." + statusKey);
+  const dupsStr = I18N.n(dups) +
+    (dups ? t("recap.dupsDetail", { server: serverDup, local: localDup }) : "");
   $recap.innerHTML =
-    `<div class="recap-head">${head}${S.dryRun ? " · 🧪 simulation" : ""}</div>` +
+    `<div class="recap-head">${head}${S.recapDry ? t("recap.simSuffix") : ""}</div>` +
     `<div class="recap-grid">` +
-    recapRow("📤 Photos / vidéos envoyées", p.uploaded || 0) +
-    (p.upgraded ? recapRow("⬆️ Améliorées sur le serveur", p.upgraded) : "") +
-    recapRow("🔁 Doublons ignorés",
-      dups + (dups ? ` (serveur ${serverDup}, locaux ${localDup})` : "")) +
-    (p.unsupported ? recapRow("🚫 Fichiers non supportés", p.unsupported) : "") +
-    recapRow("⚠️ Erreurs", p.errors || 0) +
-    recapRow("📦 Total trouvé", p.found || 0) +
-    recapRow("⏱ Temps de transfert", fmtDuration(secs)) +
+    recapRow(t("recap.uploaded"), p.uploaded || 0) +
+    (p.upgraded ? recapRow(t("recap.upgraded"), p.upgraded) : "") +
+    recapRow(t("recap.dups"), dupsStr) +
+    (p.unsupported ? recapRow(t("recap.unsupported"), p.unsupported) : "") +
+    recapRow(t("recap.errors"), p.errors || 0) +
+    recapRow(t("recap.found"), p.found || 0) +
+    recapRow(t("recap.time"), fmtDuration(S.recapSecs)) +
     `</div>` +
-    (S.dryRun
-      ? `<div class="recap-note">🧪 Simulation : aucun fichier n'a réellement été envoyé.</div>`
-      : "");
+    (S.recapDry ? `<div class="recap-note">${t("recap.simNote")}</div>` : "");
   $recap.hidden = false;
 }
 
@@ -684,7 +702,7 @@ $import.addEventListener("click", async () => {
   const dryRun = $dryRun.checked;
   setRunning(true);
   startStats(dryRun);
-  setStatus(dryRun ? "Démarrage (simulation)…" : "Démarrage…", "run");
+  setStatusKey(dryRun ? "status.startingSim" : "status.starting", "run");
   try {
     const r = await fetch("/api/import", {
       method: "POST",
@@ -700,13 +718,13 @@ $import.addEventListener("click", async () => {
         return;
       }
       const e = await r.json().catch(() => ({}));
-      setStatus("Erreur : " + (e.detail || r.status), "err");
+      setStatusKey("status.error", "err", { msg: e.detail || r.status });
       return;
     }
     const { jobId } = await r.json();
     streamJob(jobId);
   } catch (e) {
-    setStatus("Erreur réseau : " + e, "err");
+    setStatusKey("status.networkError", "err", { msg: String(e) });
     setRunning(false);
   }
 });
@@ -741,14 +759,15 @@ function fetchJson(url) {
 // instead of "nothing selected".
 function renderJobFolders(folders) {
   if (!folders || !folders.length) return;
+  lastFolders = folders; // retained so relocalize() can re-render on lang change
   const glyph = (s) => ({
     done: "✅", running: "⏳", failed: "❌", interrupted: "⏸", pending: "•",
   })[s] || "•";
   const items = folders.map((f) =>
-    `<li>${glyph(f.status)} ${f.path === "" ? "&lt;racine&gt;" : escapeHtml(f.path)}</li>`
+    `<li>${glyph(f.status)} ${f.path === "" ? t("common.root") : escapeHtml(f.path)}</li>`
   ).join("");
   $selection.innerHTML =
-    `<b>${folders.length}</b> dossier(s) en cours d'import :<ul>${items}</ul>`;
+    t("selection.importing", { count: folders.length }) + `<ul>${items}</ul>`;
 }
 
 // Expand the tree down to each job folder and tick its checkbox, so the
@@ -841,12 +860,10 @@ function attachStream(jobId, snap) {
 
 function finalizeJob(d) {
   finishStats(d);
-  if (d.status === "success") setStatus("✅ Import terminé avec succès.", "ok");
-  else if (d.status === "cancelled") setStatus("⏹ Import annulé.", "err");
-  else if (d.status === "interrupted")
-    setStatus("⏸ Import interrompu (disque débranché). Rebranche le disque " +
-      "pour reprendre là où on s'est arrêté.", "err");
-  else setStatus("❌ Import terminé avec des erreurs (code " + d.returnCode + ").", "err");
+  if (d.status === "success") setStatusKey("status.success", "ok");
+  else if (d.status === "cancelled") setStatusKey("status.cancelled", "err");
+  else if (d.status === "interrupted") setStatusKey("status.interrupted", "err");
+  else setStatusKey("status.errorCode", "err", { code: d.returnCode });
   setRunning(false);
   // Refresh resume state: interrupted -> prompt appears when disk returns;
   // clean finish -> any stale prompt is cleared.
@@ -895,9 +912,7 @@ async function resync() {
       if (healthy) return; // already watching this job on a live stream
       const snap = await fetchJson(`/api/jobs/${active.jobId}`);
       attachStream(active.jobId, snap);
-      setStatus((snap && snap.dryRun)
-        ? "⏳ Import (simulation) en cours — affichage en direct…"
-        : "⏳ Import en cours — affichage en direct…", "run");
+      setStatusKey((snap && snap.dryRun) ? "status.liveSim" : "status.live", "run");
       return;
     }
 
@@ -944,21 +959,116 @@ function setRunning(v) {
   $dryRun.disabled = v;
   $cancel.hidden = !v;
 }
+// Localized status: retains the key/params so relocalize() can re-translate the
+// status line when the language changes. Prefer this over setStatus().
+function setStatusKey(key, cls, params) {
+  lastStatus = { key, params, cls };
+  $status.textContent = t(key, params);
+  $status.className = "status " + (cls || "");
+}
+// Raw status text (already-built string, cannot be re-translated afterwards).
 function setStatus(msg, cls) {
+  lastStatus = { raw: msg, cls };
   $status.textContent = msg;
   $status.className = "status " + (cls || "");
 }
 
-// ---- boot -----------------------------------------------------------------
-async function boot() {
-  const cfg = await fetch("/api/config").then((r) => r.json());
+// ---- language switch ------------------------------------------------------
+function updateLangButton() {
+  const cur = I18N.LANGS.find((l) => l.code === I18N.lang) || I18N.LANGS[0];
+  $langCurrent.textContent = cur.code.toUpperCase();
+  $langBtn.title = cur.label;
+}
+
+function buildLangMenu() {
+  $langMenu.innerHTML = I18N.LANGS.map((l) => {
+    const active = l.code === I18N.lang;
+    return `<li role="option" data-lang="${l.code}"` +
+      ` class="lang-option${active ? " active" : ""}"` +
+      ` aria-selected="${active ? "true" : "false"}">` +
+      `<span class="lang-flag" aria-hidden="true">${l.flag}</span>` +
+      `<span class="lang-name">${l.label}</span>` +
+      `<span class="lang-check" aria-hidden="true">${active ? "✓" : ""}</span>` +
+      `</li>`;
+  }).join("");
+}
+
+function openLangMenu() {
+  buildLangMenu();
+  $langMenu.hidden = false;
+  $langBtn.setAttribute("aria-expanded", "true");
+}
+function closeLangMenu() {
+  if ($langMenu.hidden) return;
+  $langMenu.hidden = true;
+  $langBtn.setAttribute("aria-expanded", "false");
+}
+
+function setupLangSwitch() {
+  updateLangButton();
+  $langBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if ($langMenu.hidden) openLangMenu(); else closeLangMenu();
+  });
+  $langMenu.addEventListener("click", (e) => {
+    const li = e.target.closest("[data-lang]");
+    if (!li) return;
+    e.stopPropagation();
+    I18N.setLang(li.dataset.lang);
+    closeLangMenu();
+    $langBtn.focus();
+  });
+  // Close on any outside click or Escape.
+  document.addEventListener("click", () => closeLangMenu());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$langMenu.hidden) { closeLangMenu(); $langBtn.focus(); }
+  });
+}
+
+// Non-secret config bar (root / Immich URL / album mode / API-key warning).
+function renderMeta(cfg) {
   const key = cfg.apiKeySet
     ? ""
-    : ' · <span class="warn">⚠ IMMICH_API_KEY manquante</span>';
+    : ` · <span class="warn">${t("meta.apiKeyMissing")}</span>`;
   $meta.innerHTML =
-    `Racine : <code>${escapeHtml(cfg.importRoot)}</code> · ` +
-    `Immich : <code>${escapeHtml(cfg.immichUrl)}</code> · ` +
-    `Albums : <code>${cfg.albumMode}</code>${key}`;
+    `${t("meta.root")} : <code>${escapeHtml(cfg.importRoot)}</code> · ` +
+    `${t("meta.immich")} : <code>${escapeHtml(cfg.immichUrl)}</code> · ` +
+    `${t("meta.albums")} : <code>${escapeHtml(cfg.albumMode)}</code>${key}`;
+}
+
+// Re-render every dynamic surface after a runtime language change — the vanilla
+// equivalent of a framework re-render. Static [data-i18n] nodes are handled by
+// I18N.setLang(); this covers everything built imperatively from retained state.
+function relocalize() {
+  updateLangButton();
+  if (lastCfg) renderMeta(lastCfg);
+  // Tree badge tooltips (folder names are data and stay; only titles localize).
+  for (const node of nodes.values()) {
+    if (node.countEl) node.countEl.title = t("badge.directTitle");
+    if (node.recEl) node.recEl.title = t("badge.totalTitle");
+  }
+  // Selection panel: running job folders vs this tab's checkbox selection.
+  if (running) { if (lastFolders) renderJobFolders(lastFolders); }
+  else refreshSelection();
+  // Live progress card / final recap card.
+  if (S.active) applyProgress(S.lastProgress);
+  else if (!$recap.hidden && S.recapData) renderRecap();
+  // Status line — only re-translatable when it was set via a key.
+  if (lastStatus && lastStatus.key) {
+    setStatusKey(lastStatus.key, lastStatus.cls, lastStatus.params);
+  }
+  // Resume prompt: re-fetch + re-render if it is currently shown.
+  if (!$resumePrompt.hidden) checkResume();
+}
+
+// ---- boot -----------------------------------------------------------------
+async function boot() {
+  setupLangSwitch();
+  I18N.applyStatic(document);   // apply the detected language to static strings
+  I18N.onChange(relocalize);    // re-render dynamic surfaces on every switch
+  const cfg = await fetch("/api/config").then((r) => r.json());
+  lastCfg = cfg;
+  renderMeta(cfg);
   // Initial disk check drives the first tree load (handles "no disk yet").
   await pollDisk();
   refreshSelection();

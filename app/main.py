@@ -5,17 +5,25 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, fs
+from . import config, fs, i18n
 from .importer import manager
 
 app = FastAPI(title="Immich Import", docs_url=None, redoc_url=None)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def get_lang(
+    x_lang: str | None = Header(default=None),
+    accept_language: str | None = Header(default=None),
+) -> str:
+    """Resolve the response language for user-facing messages (X-Lang > Accept-Language)."""
+    return i18n.pick_lang(accept_language, x_lang)
 
 
 class ImportRequest(BaseModel):
@@ -40,33 +48,33 @@ def get_status() -> dict:
 
 
 @app.get("/api/tree")
-def get_tree(path: str = Query("")) -> dict:
+def get_tree(path: str = Query(""), lang: str = Depends(get_lang)) -> dict:
     try:
         return fs.list_children(path)
     except fs.UnsafePathError:
-        raise HTTPException(status_code=400, detail="invalid path")
+        raise HTTPException(status_code=400, detail=i18n.tr("err.invalidPath", lang))
     except (FileNotFoundError, NotADirectoryError):
-        raise HTTPException(status_code=404, detail="folder not found")
+        raise HTTPException(status_code=404, detail=i18n.tr("err.folderNotFound", lang))
 
 
 @app.get("/api/count")
-def get_count(path: str = Query("")) -> dict:
+def get_count(path: str = Query(""), lang: str = Depends(get_lang)) -> dict:
     try:
         return fs.recursive_count(path)
     except fs.UnsafePathError:
-        raise HTTPException(status_code=400, detail="invalid path")
+        raise HTTPException(status_code=400, detail=i18n.tr("err.invalidPath", lang))
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="folder not found")
+        raise HTTPException(status_code=404, detail=i18n.tr("err.folderNotFound", lang))
 
 
 @app.post("/api/import")
-def start_import(req: ImportRequest) -> dict:
+def start_import(req: ImportRequest, lang: str = Depends(get_lang)) -> dict:
     try:
         job = manager.start(req.paths, dry_run=req.dryRun)
     except RuntimeError as exc:  # already running
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=i18n.tr(str(exc), lang))
     except ValueError as exc:  # empty selection
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=i18n.tr(str(exc), lang))
     return {"jobId": job.id, "paths": job.paths}
 
 
@@ -77,22 +85,22 @@ def get_resumable() -> dict:
 
 
 @app.post("/api/import/resume")
-def resume_import() -> dict:
+def resume_import(lang: str = Depends(get_lang)) -> dict:
     try:
         job = manager.resume()
     except RuntimeError as exc:  # already running
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=i18n.tr(str(exc), lang))
     except ValueError as exc:  # nothing to resume
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=i18n.tr(str(exc), lang))
     return {"jobId": job.id, "paths": job.paths}
 
 
 @app.post("/api/import/discard")
-def discard_resumable() -> dict:
+def discard_resumable(lang: str = Depends(get_lang)) -> dict:
     """Discard a persisted interrupted import (user chose to start over)."""
     ok = manager.discard_resumable()
     if not ok:
-        raise HTTPException(status_code=409, detail="an import is running")
+        raise HTTPException(status_code=409, detail=i18n.tr("err.importRunning", lang))
     return {"discarded": True}
 
 
@@ -105,26 +113,26 @@ def active_job() -> dict:
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str, since: int = Query(0, ge=0)) -> dict:
+def get_job(job_id: str, since: int = Query(0, ge=0), lang: str = Depends(get_lang)) -> dict:
     job = manager.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise HTTPException(status_code=404, detail=i18n.tr("err.jobNotFound", lang))
     return job.snapshot(since=since)
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: str) -> dict:
+def cancel_job(job_id: str, lang: str = Depends(get_lang)) -> dict:
     ok = manager.cancel(job_id)
     if not ok:
-        raise HTTPException(status_code=409, detail="job not running")
+        raise HTTPException(status_code=409, detail=i18n.tr("err.jobNotRunning", lang))
     return {"cancelled": True}
 
 
 @app.get("/api/jobs/{job_id}/stream")
-async def stream_job(job_id: str) -> StreamingResponse:
+async def stream_job(job_id: str, lang: str = Depends(get_lang)) -> StreamingResponse:
     job = manager.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="job not found")
+        raise HTTPException(status_code=404, detail=i18n.tr("err.jobNotFound", lang))
 
     async def event_gen():
         # No full-history replay: send the current progress snapshot plus only a

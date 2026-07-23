@@ -218,6 +218,55 @@ body {
 }
 .meta .warn { color: var(--warn); font-weight: 600; }
 
+/* right cluster of the top bar: config pill + language switch */
+.topbar-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+/* ---- language switch (globe) --------------------------------------------- */
+.lang-switch { position: relative; flex: 0 0 auto; }
+.lang-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 12px;
+  border-radius: var(--pill);
+  border: 1px solid var(--border);
+  background: var(--glass);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  color: var(--muted);
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: color .15s, border-color .15s, background .15s;
+  box-shadow: var(--shadow);
+}
+.lang-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.lang-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.lang-globe { display: grid; place-items: center; color: var(--accent-bright); }
+.lang-current { letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.lang-caret { display: grid; place-items: center; color: var(--muted-2); transition: transform .15s ease; }
+.lang-btn[aria-expanded="true"] .lang-caret { transform: rotate(180deg); }
+
+.lang-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+  min-width: 190px; margin: 0; padding: 6px; list-style: none;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--glass-strong);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: var(--shadow-strong);
+}
+.lang-menu[hidden] { display: none; }
+.lang-option {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; border-radius: var(--radius-sm);
+  font-size: 13.5px; color: var(--muted);
+  cursor: pointer; user-select: none;
+  transition: background .12s, color .12s;
+}
+.lang-option:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+.lang-option.active { color: var(--accent-bright); background: var(--accent-wash); }
+.lang-flag { font-size: 16px; line-height: 1; flex: 0 0 auto; }
+.lang-name { flex: 1 1 auto; font-weight: 500; }
+.lang-check { flex: 0 0 auto; color: var(--accent-bright); font-weight: 700; }
+
 /* ---- footer credit ------------------------------------------------------- */
 .credit {
   padding: 10px 24px;
@@ -635,7 +684,35 @@ main {
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 /* ---- responsive ---------------------------------------------------------- */
+/* Below the two-column threshold the panels stack and the page scrolls
+   vertically instead of trapping everything inside a 100vh flex column — which
+   would squash the tree and side panel on a phone. Each panel keeps a usable
+   min height and its own inner scroll. No horizontal page scroll at any width. */
 @media (max-width: 900px) {
-  main { grid-template-columns: 1fr; }
+  .app { height: auto; min-height: 100vh; }
+  main {
+    grid-template-columns: 1fr;
+    height: auto;
+    grid-auto-rows: min-content;
+  }
   .context-pill { display: none; }
+  .panel { min-height: 300px; }
+  .tree-panel { max-height: 65vh; }
+  .side-panel { max-height: none; }
+  .side-body { overflow: visible; }
+}
+
+@media (max-width: 480px) {
+  .topbar { flex-wrap: wrap; gap: 12px; padding: 14px 16px 6px; }
+  .topbar-right { width: 100%; justify-content: flex-end; }
+  main { gap: 10px; padding: 10px; }
+  .disk-banner { margin: 8px 10px 0; }
+  .resume-prompt { margin: 12px 10px 0; }
+  .resume-actions { width: 100%; }
+  .resume-actions .btn { flex: 1 1 auto; }
+  /* Give the language menu room without spilling off-screen. */
+  .lang-menu { min-width: min(220px, 78vw); }
+  .brand-title { font-size: 15px; }
+  .panel-head { padding: 14px 15px; }
+  .side-body { padding: 15px; }
 }
