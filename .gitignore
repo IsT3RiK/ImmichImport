@@ -13,3 +13,4 @@ data/
 # Divers
 *.log
 .tmp-*
+.gstack/

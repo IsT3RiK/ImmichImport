@@ -776,21 +776,10 @@ body.wiz-open { overflow: hidden; }
   font-size: 11.5px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .2em; color: var(--text);
 }
-.wiz-lang {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 0 8px; height: 30px;
-  border-radius: var(--radius-sm); border: 1px solid var(--border);
-  background: var(--panel-2); color: var(--muted);
-}
-.wiz-lang-ic { display: grid; place-items: center; color: var(--muted); }
-.wiz-lang-ic svg { width: 14px; height: 14px; }
-.wiz-lang select {
-  appearance: none; -webkit-appearance: none;
-  border: none; background: transparent; color: var(--text);
-  font-family: var(--font-mono); font-size: 11.5px; font-weight: 500;
-  letter-spacing: .06em; padding: 4px 2px; cursor: pointer; outline: none;
-}
-.wiz-lang select option { background: var(--panel); color: var(--text); font-family: var(--font-sans); }
+/* Sélecteur de langue : on réutilise le composant de la barre principale
+   (.lang-switch / .lang-btn / .lang-menu), juste réduit à l'échelle de l'en-tête. */
+.wiz-langswitch .lang-btn { height: 32px; padding: 0 10px; font-size: 12px; }
+.wiz-langswitch .lang-globe svg { width: 15px; height: 15px; }
 .wiz-strip { margin-left: auto; }
 
 .wiz-film { display: flex; align-items: center; gap: 7px; margin: 0; padding: 0; list-style: none; }

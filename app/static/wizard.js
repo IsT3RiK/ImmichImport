@@ -79,6 +79,7 @@
     left: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
     right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
     globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+    caret: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
   };
   const spinner = '<span class="wiz-spin"></span>';
 
@@ -113,7 +114,11 @@
   }
 
   function onKey(e) {
-    if (e.key === "Escape" && S.onCancel) S.onCancel();
+    if (e.key !== "Escape") return;
+    // Échap referme d'abord le menu de langue, seulement ensuite l'assistant.
+    const menu = root && root.querySelector("#wiz-lang-menu");
+    if (menu && !menu.hidden) { closeLangMenu(); return; }
+    if (S.onCancel) S.onCancel();
   }
 
   /* --- rendu ------------------------------------------------------------ */
@@ -123,10 +128,7 @@
       `<div class="wiz-modal" role="dialog" aria-modal="true" aria-labelledby="wiz-title">
         <header class="wiz-head">
           <h1 id="wiz-title" class="wiz-title">${esc(t("wizard.header"))}</h1>
-          <label class="wiz-lang" title="${esc(t("lang.label"))}">
-            <span class="wiz-lang-ic">${IC.globe}</span>
-            <select id="wiz-lang-sel" aria-label="${esc(t("lang.label"))}">${langOptions()}</select>
-          </label>
+          ${langSwitch()}
           <div class="wiz-strip">${filmStrip()}</div>
         </header>
         <div class="wiz-body">${stepBody()}</div>
@@ -137,10 +139,42 @@
     if (S.step === 1 && !S.discovery && !S.discovering) doDiscover(null);
   }
 
-  function langOptions() {
-    return I18N.LANGS.map((l) =>
-      `<option value="${l.code}"${l.code === I18N.lang ? " selected" : ""}>${l.code.toUpperCase()}</option>`
-    ).join("");
+  /* Le même sélecteur que la barre principale : globe + menu de verre listant
+     les langues avec drapeau et nom complet (pas un <select> natif). */
+  function langSwitch() {
+    const cur = I18N.LANGS.find((l) => l.code === I18N.lang) || I18N.LANGS[0];
+    return `<div class="lang-switch wiz-langswitch">
+      <button type="button" class="lang-btn" id="wiz-lang-btn" aria-haspopup="listbox"
+              aria-expanded="false" aria-label="${esc(t("lang.label"))}" title="${esc(cur.label)}">
+        <span class="lang-globe" aria-hidden="true">${IC.globe}</span>
+        <span class="lang-current">${esc(cur.code.toUpperCase())}</span>
+        <span class="lang-caret" aria-hidden="true">${IC.caret}</span>
+      </button>
+      <ul class="lang-menu" id="wiz-lang-menu" role="listbox" aria-label="${esc(t("lang.label"))}" hidden></ul>
+    </div>`;
+  }
+
+  function langMenuHtml() {
+    return I18N.LANGS.map((l) => {
+      const active = l.code === I18N.lang;
+      return `<li role="option" data-lang="${l.code}"` +
+        ` class="lang-option${active ? " active" : ""}"` +
+        ` aria-selected="${active ? "true" : "false"}">` +
+        `<span class="lang-flag" aria-hidden="true">${l.flag}</span>` +
+        `<span class="lang-name">${esc(l.label)}</span>` +
+        `<span class="lang-check" aria-hidden="true">${active ? "✓" : ""}</span>` +
+        `</li>`;
+    }).join("");
+  }
+
+  function closeLangMenu() {
+    if (!root) return;
+    const menu = root.querySelector("#wiz-lang-menu");
+    const btn = root.querySelector("#wiz-lang-btn");
+    if (menu && !menu.hidden) {
+      menu.hidden = true;
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    }
   }
 
   /** La bande-film : une vue par étape, exposée à mesure qu'on avance. */
@@ -418,8 +452,29 @@
 
   /* --- branchement des événements --------------------------------------- */
   function bind() {
-    const sel = root.querySelector("#wiz-lang-sel");
-    if (sel) sel.addEventListener("change", (e) => I18N.setLang(e.target.value));
+    // Sélecteur de langue (même composant que la barre principale).
+    const langBtn = root.querySelector("#wiz-lang-btn");
+    const langMenu = root.querySelector("#wiz-lang-menu");
+    if (langBtn && langMenu) {
+      langBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (langMenu.hidden) {
+          langMenu.innerHTML = langMenuHtml();
+          langMenu.hidden = false;
+          langBtn.setAttribute("aria-expanded", "true");
+        } else {
+          closeLangMenu();
+        }
+      });
+      langMenu.addEventListener("click", (e) => {
+        const li = e.target.closest("[data-lang]");
+        if (!li) return;
+        e.stopPropagation();
+        I18N.setLang(li.dataset.lang); // déclenche un re-rendu complet
+      });
+    }
+    // Un clic ailleurs dans la fenêtre referme le menu.
+    root.addEventListener("click", closeLangMenu);
 
     on("#wiz-cancel", "click", () => { if (S.onCancel) S.onCancel(); });
     on("#wiz-back", "click", () => { S.step = Math.max(0, S.step - 1); render(); });
