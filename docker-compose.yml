@@ -1,0 +1,51 @@
+# Standalone compose for the Immich Import web UI.
+#
+# It joins the EXISTING Immich docker network (immich_default) so it can reach
+# the immich_server container by name. Adjust `IMMICH_NETWORK` and the
+# volume path to your mounted external disk.
+#
+#   docker compose up -d --build
+#
+services:
+  immich-import:
+    build:
+      context: .
+      args:
+        # override the baked-in immich-go release if needed
+        IMMICH_GO_VERSION: v0.32.0
+    container_name: immich-import
+    restart: unless-stopped
+    ports:
+      - "8090:8080"            # http://<nas-ip>:8090
+    environment:
+      IMPORT_ROOT: /import
+      IMMICH_URL: ${IMMICH_URL:-http://immich_server:2283}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:?set IMMICH_API_KEY in .env}
+      ALBUM_MODE: ${ALBUM_MODE:-FOLDER}
+      # IMMICH_GO_EXTRA_ARGS: "--include-type=IMAGE"   # optional
+    volumes:
+      # PARENT directory where the NAS mounts USB disks (e.g. /mnt/@usb), NOT a
+      # specific disk. `propagation: rslave` makes plug/unplug events on the host
+      # show up live inside the container, so you can hot-swap the external disk
+      # without restarting. Mounted read-only to protect the source files.
+      - type: bind
+        source: ${IMPORT_HOST_PATH:?set IMPORT_HOST_PATH in .env}
+        target: /import
+        read_only: true
+        bind:
+          propagation: rslave
+      # Writable state: persists import progress so an interrupted import
+      # (disk unplugged / container restarted) can be resumed. NOT the :ro disk.
+      - immich-import-state:/state
+    networks:
+      - immich
+
+volumes:
+  immich-import-state:
+
+networks:
+  # Reuse the network created by your Immich compose stack.
+  # Find its real name with:  docker network ls | grep immich
+  immich:
+    external: true
+    name: ${IMMICH_NETWORK:-immich_default}

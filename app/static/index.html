@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Immich Import</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Top app bar -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">Immich Import</span>
+          <span class="brand-sub">Console de transfert</span>
+        </div>
+      </div>
+
+      <div class="context-pill">
+        <span class="ctx-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </span>
+        <div id="meta" class="meta"></div>
+      </div>
+    </header>
+
+    <div id="disk-banner" class="disk-banner" hidden></div>
+
+    <div id="resume-prompt" class="resume-prompt" hidden>
+      <div class="resume-body">
+        <div class="resume-title">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="10" y1="15" x2="10" y2="9"/><line x1="14" y1="15" x2="14" y2="9"/></svg>
+          Import interrompu détecté
+        </div>
+        <div id="resume-detail" class="resume-detail"></div>
+      </div>
+      <div class="resume-actions">
+        <button id="resume-go" class="btn primary">Reprendre</button>
+        <button id="resume-discard" class="btn ghost">Recommencer à zéro</button>
+      </div>
+    </div>
+
+    <main>
+      <!-- Tree panel -->
+      <section class="panel tree-panel">
+        <div class="panel-head">
+          <div class="panel-heading">
+            <span class="head-ic" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            </span>
+            <span class="panel-title">Arborescence du disque</span>
+          </div>
+          <div class="head-actions">
+            <span class="disk-state" title="État du disque">
+              <span id="disk-dot" class="disk-dot"></span>
+            </span>
+            <button id="reload" class="icon-btn" title="Recharger l'arborescence" aria-label="Recharger">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="tree" class="tree" role="tree" aria-label="Dossiers"></div>
+      </section>
+
+      <!-- Control / status panel -->
+      <section class="panel side-panel">
+        <div class="panel-head">
+          <div class="panel-heading">
+            <span class="head-ic" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </span>
+            <span class="panel-title">Sélection &amp; transfert</span>
+          </div>
+        </div>
+
+        <div class="side-body">
+          <div class="field">
+            <div class="field-label">Dossiers sélectionnés</div>
+            <div id="selection" class="selection">Aucun dossier sélectionné.</div>
+          </div>
+
+          <label id="dry-toggle" class="dry-toggle" title="Simule l'import sans rien téléverser : immich-go affiche ce qu'il ferait, aucune modification dans Immich.">
+            <input type="checkbox" id="dry-run" />
+            <span class="dry-text">
+              <span class="dry-title">Mode simulation (dry-run)</span>
+              <span class="dry-hint">Aucune donnée n'est envoyée</span>
+            </span>
+          </label>
+
+          <div class="actions">
+            <button id="import" class="btn primary block" disabled>Importer la sélection</button>
+            <button id="cancel" class="btn danger block" hidden>Annuler l'import</button>
+          </div>
+
+          <div id="progress" class="progress" hidden>
+            <div id="live-head" class="live-head"></div>
+            <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+            <div class="progress-meta">
+              <span id="progress-pct" class="progress-pct">0 %</span>
+              <span id="progress-extra" class="progress-extra"></span>
+            </div>
+            <div id="progress-stats" class="progress-stats"></div>
+          </div>
+
+          <div id="recap" class="recap" hidden></div>
+
+          <details id="logs-fold" class="logs-fold">
+            <summary>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+              Détails techniques (logs immich-go)
+            </summary>
+            <pre id="logs" class="logs" aria-live="polite"></pre>
+          </details>
+        </div>
+
+        <div id="status" class="status"></div>
+      </section>
+    </main>
+
+    <footer class="credit">build by IsT3RiK</footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

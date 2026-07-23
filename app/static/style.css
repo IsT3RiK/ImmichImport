@@ -1,0 +1,641 @@
+/* ============================================================================
+   Immich Import — système d'interface « verre » (partagé avec ImmichDupFinder)
+   --------------------------------------------------------------------------
+   Sombre premium façon Vercel / Raycast : noir profond légèrement violacé,
+   traversé de halos diffus, sur lequel sont posés des panneaux de verre dépoli.
+   Un accent violet néon réservé à l'action, une sémantique vert/rouge/ambre, et
+   de la lueur là où quelque chose compte.
+
+   Toutes les classes et tous les id consommés par app.js sont préservés : ce
+   fichier ne fait que restyler.
+   ========================================================================== */
+
+/* --- Polices embarquées (aucun CDN, l'app reste entière hors-ligne) -------- */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/static/fonts/geist-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/static/fonts/geist-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-ext-500-normal.woff2") format("woff2");
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* --- Base : noir profond, très légèrement violacé --------------------- */
+  --bg: oklch(0.16 0.014 285);
+  --bg-2: oklch(0.18 0.015 285);
+  --panel: oklch(0.215 0.016 285); /* repli opaque sous le verre */
+  --panel-2: oklch(0.245 0.018 285);
+  --panel-3: oklch(0.285 0.02 285);
+  --card-in: oklch(0.135 0.012 285); /* champs, creux */
+
+  /* --- Verre : translucide + flou -------------------------------------- */
+  --glass: oklch(0.26 0.02 285 / 0.5);
+  --glass-strong: oklch(0.24 0.02 285 / 0.82);
+  --glass-hi: rgba(255, 255, 255, 0.08); /* liseré clair en haut du verre */
+
+  /* --- Bordures : une progression, pas un booléen ---------------------- */
+  --border: rgba(255, 255, 255, 0.11);
+  --border-soft: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.2);
+
+  /* --- Texte : quatre niveaux ------------------------------------------ */
+  --text: oklch(0.985 0.002 285);
+  --muted: oklch(0.7 0.01 285);
+  --muted-2: oklch(0.58 0.012 285);
+
+  /* --- Accent : violet néon — action, sélection, identité -------------- */
+  --accent: oklch(0.68 0.2 288);
+  --accent-2: oklch(0.58 0.21 286);
+  --accent-bright: oklch(0.78 0.16 290);
+  --accent-ink: oklch(0.985 0.002 285);
+  --accent-wash: oklch(0.68 0.2 288 / 0.16);
+
+  /* --- Vert : donnée / succès / progression --------------------------- */
+  --keep: oklch(0.8 0.19 155);
+  --keep-2: oklch(0.72 0.19 152);
+  --keep-ink: oklch(0.16 0.03 155);
+  --keep-wash: oklch(0.8 0.19 155 / 0.14);
+
+  /* --- Rouge : danger / annulation ------------------------------------ */
+  --danger: oklch(0.66 0.22 22);
+  --danger-wash: oklch(0.66 0.22 22 / 0.14);
+
+  /* --- Ambre : avertissement / simulation ----------------------------- */
+  --warn: oklch(0.82 0.15 80);
+  --warn-wash: oklch(0.82 0.15 80 / 0.14);
+
+  /* --- Géométrie : rayons généreux ------------------------------------ */
+  --radius: 18px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --pill: 999px;
+
+  --shadow: inset 0 1px 0 0 var(--glass-hi), 0 8px 30px -12px rgba(0, 0, 0, 0.6);
+  --shadow-strong: inset 0 1px 0 0 var(--glass-hi), 0 24px 70px -20px rgba(0, 0, 0, 0.75);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ring: 0 0 0 3px var(--accent-wash);
+
+  /* --- Fontes --------------------------------------------------------- */
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  font-synthesis-weight: none;
+  /* Le fond n'est pas un aplat : trois halos diffus donnent de la profondeur
+     au noir et accrochent la lumière du verre posé dessus. */
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(60% 55% at 12% -8%, oklch(0.4 0.14 288 / 0.22), transparent 70%),
+    radial-gradient(55% 50% at 100% 0%, oklch(0.42 0.1 210 / 0.14), transparent 65%),
+    radial-gradient(70% 60% at 50% 118%, oklch(0.35 0.1 300 / 0.14), transparent 70%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.app { height: 100vh; display: flex; flex-direction: column; min-height: 0; }
+
+/* --- Verre : la signature. Un panneau translucide, flouté, liseré clair en
+   haut, ombre douce. Réutilisé partout où quelque chose « flotte ». --------- */
+.panel,
+.context-pill,
+.resume-prompt,
+.progress,
+.recap {
+  background: var(--glass);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+}
+
+/* ---- top app bar --------------------------------------------------------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 22px 8px;
+}
+.brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.brand-mark {
+  display: grid; place-items: center;
+  width: 42px; height: 42px;
+  border-radius: 13px;
+  color: var(--accent-ink);
+  background-image: linear-gradient(140deg, var(--accent), var(--accent-2));
+  box-shadow:
+    0 8px 22px -6px oklch(0.68 0.2 288 / 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+.brand-title { font-size: 16px; font-weight: 600; letter-spacing: -.015em; }
+.brand-sub { font-size: 11.5px; color: var(--muted-2); font-weight: 500; }
+
+/* config bar en pilule de verre */
+.context-pill {
+  display: flex; align-items: center; gap: 11px;
+  min-width: 0; max-width: 62%;
+  padding: 9px 16px 9px 11px;
+  border-radius: var(--pill);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.ctx-ic {
+  display: grid; place-items: center;
+  width: 28px; height: 28px; flex: 0 0 28px;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+}
+.meta {
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.meta code {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.meta .warn { color: var(--warn); font-weight: 600; }
+
+/* ---- footer credit ------------------------------------------------------- */
+.credit {
+  padding: 10px 24px;
+  color: var(--muted-2);
+  font-size: 11px;
+  text-align: right;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+/* ---- disk hot-plug banner + status dot ----------------------------------- */
+.disk-banner {
+  margin: 8px 14px 0;
+  padding: 12px 18px;
+  font-size: 13px; font-weight: 500;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+.disk-banner.warn { background: var(--danger-wash); color: oklch(0.82 0.11 22); border-color: oklch(0.66 0.22 22 / 0.3); }
+.disk-banner.ok   { background: var(--keep-wash); color: var(--keep); border-color: oklch(0.8 0.19 155 / 0.28); }
+
+.disk-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted-2); vertical-align: middle;
+}
+.disk-dot.ok  { background: var(--keep); box-shadow: 0 0 0 4px var(--keep-wash); }
+.disk-dot.off { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-wash); }
+
+/* ---- resume prompt ------------------------------------------------------- */
+.resume-prompt {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  margin: 14px 14px 0;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  border: 1px solid oklch(0.68 0.2 288 / 0.28);
+  box-shadow: var(--shadow);
+}
+.resume-title {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: 14px; margin-bottom: 4px; color: var(--text);
+}
+.resume-title svg { color: var(--accent-bright); }
+.resume-detail { color: var(--muted); font-size: 13px; }
+.resume-detail b { color: var(--text); }
+.resume-detail ul { margin: 7px 0; padding-left: 18px; max-height: 120px; overflow: auto; }
+.resume-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* ---- layout -------------------------------------------------------------- */
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 14px;
+  padding: 14px;
+  min-height: 0;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden;
+}
+.panel-head {
+  padding: 16px 18px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border-soft);
+}
+.panel-heading { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.head-ic {
+  display: grid; place-items: center;
+  width: 34px; height: 34px; flex: 0 0 34px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+}
+.panel-title {
+  font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; color: var(--text);
+}
+.head-actions { display: flex; align-items: center; gap: 10px; }
+.disk-state {
+  display: grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--panel-2); border: 1px solid var(--border-soft);
+}
+
+.icon-btn {
+  display: grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer; transition: all .15s ease;
+}
+.icon-btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--panel-3); }
+.icon-btn:active { transform: translateY(1px); }
+
+/* ---- tree ---------------------------------------------------------------- */
+.tree { overflow: auto; padding: 6px 12px 12px; flex: 1; }
+
+.node-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  white-space: nowrap; transition: background .12s ease;
+}
+.node-row:hover { background: rgba(255, 255, 255, 0.04); }
+.node-row.selected {
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px oklch(0.68 0.2 288 / 0.35);
+}
+.node-row.selected .node-name { color: var(--accent-bright); font-weight: 600; }
+
+.twisty {
+  width: 18px; height: 18px; flex: 0 0 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--muted-2); user-select: none;
+  font-size: 10px; border-radius: 6px; transition: background .12s, color .12s;
+}
+.twisty:hover:not(.leaf) { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.twisty.leaf { visibility: hidden; }
+.twisty.open::before   { content: "▾"; }
+.twisty.closed::before { content: "▸"; }
+.twisty.loading::before { content: "◌"; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.node-row input[type=checkbox] {
+  width: 16px; height: 16px; accent-color: var(--accent);
+  cursor: pointer; flex: 0 0 16px;
+}
+.folder-ic { font-size: 14px; flex: 0 0 auto; opacity: .95; }
+.node-name { cursor: default; font-size: 13.5px; letter-spacing: -.005em; }
+.spacer { flex: 1 1 auto; min-width: 16px; }
+
+/* count badges */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+  font-size: 11.5px; font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  padding: 3px 9px; border-radius: var(--pill);
+  border: 1px solid transparent; cursor: help;
+}
+.badge .ic { font-size: 11px; opacity: .85; font-family: var(--font-sans); }
+.badge .dot { opacity: .35; margin: 0 1px; }
+.badge .sig { font-weight: 500; }
+.badge-direct { color: var(--muted); background: var(--panel-2); border-color: var(--border-soft); }
+.badge-total  { color: var(--keep); background: var(--keep-wash); border-color: oklch(0.8 0.19 155 / 0.22); }
+
+.children { margin-left: 22px; padding-left: 6px; border-left: 1px solid var(--border-soft); }
+
+/* ---- side panel ---------------------------------------------------------- */
+.side-panel { overflow: hidden; }
+.side-body {
+  overflow: auto; padding: 16px 18px 18px;
+  display: flex; flex-direction: column; gap: 15px;
+  flex: 1; min-height: 0;
+}
+
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--muted-2);
+}
+.selection {
+  font-size: 13px; color: var(--muted);
+  background: var(--card-in);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 13px 15px;
+  max-height: 180px; overflow: auto;
+}
+.selection b { color: var(--text); }
+.selection ul { margin: 8px 0 0; padding-left: 18px; }
+.selection li {
+  color: var(--text); margin: 3px 0; word-break: break-all;
+  font-family: var(--font-mono); font-size: 12px;
+}
+
+/* dry-run toggle */
+.dry-toggle {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 15px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  cursor: pointer; user-select: none;
+  transition: border-color .15s, background .15s;
+}
+.dry-toggle:hover { border-color: var(--border-strong); }
+.dry-toggle input { cursor: pointer; margin: 0; width: 17px; height: 17px; accent-color: var(--warn); }
+.dry-text { display: flex; flex-direction: column; line-height: 1.25; }
+.dry-title { font-size: 13px; font-weight: 500; color: var(--text); }
+.dry-hint { font-size: 11.5px; color: var(--muted-2); }
+.dry-toggle:has(input:checked) {
+  border-color: oklch(0.82 0.15 80 / 0.5);
+  background: var(--warn-wash);
+}
+.dry-toggle:has(input:checked) .dry-title { color: var(--warn); }
+.dry-toggle input:disabled { cursor: default; }
+
+/* buttons */
+.actions { display: flex; flex-direction: column; gap: 10px; }
+.btn {
+  padding: 11px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit; font-size: 14px; font-weight: 500;
+  cursor: pointer; transition: all .15s ease;
+}
+.btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--panel-3); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.block { width: 100%; }
+/* Bouton primaire : dégradé d'accent + lueur. La seule surface colorée franche
+   de l'écran, réservée à l'action qui fait avancer. */
+.btn.primary {
+  background-image: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  border-color: transparent; color: var(--accent-ink); font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+    0 8px 24px -8px oklch(0.68 0.2 288 / 0.65);
+}
+.btn.primary:hover:not(:disabled) { transform: translateY(-1px); border-color: transparent; filter: brightness(1.04); }
+.btn.danger {
+  background: var(--danger-wash); border-color: oklch(0.66 0.22 22 / 0.4); color: oklch(0.8 0.13 22);
+}
+.btn.danger:hover:not(:disabled) { background: oklch(0.66 0.22 22 / 0.2); border-color: var(--danger); }
+.btn.ghost { background: transparent; border-color: var(--border); color: var(--muted); }
+.btn.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); }
+
+/* ---- live progress ------------------------------------------------------- */
+.progress {
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.live-head {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 13px; color: var(--text);
+  margin-bottom: 13px; min-height: 18px; overflow: hidden;
+}
+.live-phase {
+  font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; flex: 0 1 auto;
+}
+.live-folder {
+  color: var(--muted);
+  font-family: var(--font-mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 0 1 auto;
+}
+.spinner {
+  width: 16px; height: 16px; flex: 0 0 16px; border-radius: 50%;
+  border: 2px solid var(--border-strong); border-top-color: var(--accent-bright);
+  animation: spin .7s linear infinite;
+}
+/* pulsing "live" badge — unmistakable proof the import is running */
+.live-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: auto; flex: 0 0 auto;
+  padding: 3px 10px 3px 8px;
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--keep);
+  border-radius: var(--pill);
+  background: var(--keep-wash);
+  border: 1px solid oklch(0.8 0.19 155 / 0.3);
+}
+.live-dot {
+  width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%;
+  background: var(--keep);
+  animation: pulse 1.4s ease-out infinite;
+}
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 oklch(0.8 0.19 155 / 0.55); }
+  70%  { box-shadow: 0 0 0 7px oklch(0.8 0.19 155 / 0); }
+  100% { box-shadow: 0 0 0 0 oklch(0.8 0.19 155 / 0); }
+}
+.progress-track {
+  height: 9px; border-radius: var(--pill);
+  background: var(--card-in); border: 1px solid var(--border-soft); overflow: hidden;
+}
+.progress-fill {
+  position: relative;
+  height: 100%; width: 0; border-radius: var(--pill);
+  background: linear-gradient(90deg, var(--keep-2), var(--keep));
+  box-shadow: 0 0 14px oklch(0.8 0.19 155 / 0.5);
+  transition: width .4s ease;
+  overflow: hidden;
+}
+/* moving sheen on the filled bar -> reads as "actively streaming" */
+.progress.working .progress-fill::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.45) 50%, transparent 80%);
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation: sheen 1.25s linear infinite;
+}
+@keyframes sheen {
+  from { background-position: -50% 0; }
+  to   { background-position: 160% 0; }
+}
+/* indeterminate mode: a segment slides across when % is meaningless */
+.progress.indeterminate .progress-fill {
+  width: 32% !important;
+  transition: none;
+  animation: indet 1.25s cubic-bezier(.6,.05,.4,.95) infinite;
+}
+.progress.indeterminate .progress-fill::after { animation: none; }
+@keyframes indet {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(360%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress.working .progress-fill::after,
+  .progress.indeterminate .progress-fill,
+  .spinner, .live-dot { animation: none; }
+}
+.progress-meta {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; margin-top: 9px;
+}
+.progress-pct   { font-size: 12px; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.progress-extra { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.progress-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; }
+.stat-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 11px; font-size: 12px;
+  border-radius: var(--pill);
+  background: var(--panel-3); border: 1px solid var(--border-soft);
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.stat-chip b { color: var(--text); font-weight: 600; }
+.stat-chip .ic { font-size: 11px; }
+.stat-chip .lbl { opacity: .8; }
+.stat-chip.err { border-color: oklch(0.66 0.22 22 / 0.4); background: var(--danger-wash); }
+.stat-chip.err b { color: oklch(0.82 0.11 22); }
+/* live duplicate estimate (firms up to the exact count at folder close) */
+.stat-chip.est b { font-style: italic; color: var(--keep); }
+.stat-chip.est { border-style: dashed; }
+
+/* ---- recap card ---------------------------------------------------------- */
+.recap {
+  padding: 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.recap-head { font-size: 16px; font-weight: 600; margin-bottom: 13px; letter-spacing: -.01em; }
+.recap-grid { display: flex; flex-direction: column; gap: 2px; }
+.recap-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; font-size: 13px; color: var(--muted);
+  padding: 7px 0; border-bottom: 1px solid var(--border-soft);
+}
+.recap-row:last-child { border-bottom: none; }
+.recap-row b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.recap-note {
+  margin-top: 13px; padding-top: 11px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 12px; color: var(--warn);
+}
+
+/* ---- debug log fold ------------------------------------------------------ */
+.logs-fold { border-top: 1px solid var(--border-soft); padding-top: 13px; }
+.logs-fold > summary {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--muted); cursor: pointer;
+  user-select: none; padding: 3px 0; list-style: none;
+}
+.logs-fold > summary::-webkit-details-marker { display: none; }
+.logs-fold > summary svg { transition: transform .15s ease; color: var(--muted-2); }
+.logs-fold[open] > summary svg { transform: rotate(90deg); }
+.logs-fold > summary:hover { color: var(--text); }
+.logs-fold[open] > summary { color: var(--text); margin-bottom: 9px; }
+.logs {
+  margin: 0; padding: 13px;
+  max-height: 240px; overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+  color: oklch(0.78 0.03 250); background: var(--card-in);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+}
+
+/* ---- status bar ---------------------------------------------------------- */
+.status {
+  padding: 14px 18px;
+  font-size: 13px; font-weight: 500;
+  border-top: 1px solid var(--border-soft);
+  min-height: 20px;
+}
+.status.ok  { color: var(--keep); }
+.status.err { color: var(--danger); }
+.status.run { color: var(--accent-bright); }
+
+/* ---- scrollbars ---------------------------------------------------------- */
+* { scrollbar-color: oklch(0.4 0.02 285) transparent; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--panel-3); border-radius: var(--pill); border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: padding-box; }
+
+::selection { background: var(--accent-wash); color: var(--text); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* ---- responsive ---------------------------------------------------------- */
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  .context-pill { display: none; }
+}
