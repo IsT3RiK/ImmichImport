@@ -276,6 +276,12 @@ body {
   letter-spacing: .04em;
 }
 .credit-heart { color: var(--danger); }
+.credit-link {
+  color: var(--muted); text-decoration: none; font-weight: 600;
+  transition: color .15s ease;
+}
+.credit-link:hover { color: var(--accent-bright); }
+.credit-link:focus-visible { outline: none; color: var(--accent-bright); text-decoration: underline; }
 
 /* ---- disk hot-plug banner + status dot ----------------------------------- */
 .disk-banner {
