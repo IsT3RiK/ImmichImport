@@ -26,7 +26,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from . import config, fs, state
+from . import config, fs, settings, state
 
 JobStatus = Literal["running", "success", "error", "cancelled", "interrupted"]
 FolderStatus = Literal["pending", "running", "done", "failed", "interrupted"]
@@ -430,15 +430,16 @@ class JobManager:
 
     # -- command building ---------------------------------------------------
     def _build_cmd(self, job: Job, abs_path: str) -> list[str]:
+        album = settings.album_mode()
         cmd = [
             config.IMMICH_GO_BIN, "upload", "from-folder",
             "--no-ui",
-            "--server", config.IMMICH_URL,
-            "--api-key", config.IMMICH_API_KEY,
+            "--server", settings.immich_url(),
+            "--api-key", settings.immich_api_key(),
             "--recursive",
         ]
-        if config.ALBUM_MODE and config.ALBUM_MODE != "NONE":
-            cmd.append(f"--folder-as-album={config.ALBUM_MODE}")
+        if album and album != "NONE":
+            cmd.append(f"--folder-as-album={album}")
         if job.dry_run and "--dry-run" not in config.IMMICH_GO_EXTRA_ARGS:
             cmd.append("--dry-run")
         cmd.extend(config.IMMICH_GO_EXTRA_ARGS)
@@ -491,7 +492,7 @@ class JobManager:
         monitor = threading.Thread(target=self._monitor, args=(job,), daemon=True)
         monitor.start()
         try:
-            if not config.IMMICH_API_KEY:
+            if not settings.immich_api_key():
                 job.log("[error] IMMICH_API_KEY is not set — aborting.")
                 job.status = "error"
                 return

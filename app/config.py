@@ -13,9 +13,19 @@ def _clean(val: str | None) -> str:
 # Root of the mounted external disk (mounted :ro in the container).
 IMPORT_ROOT = Path(_clean(os.environ.get("IMPORT_ROOT")) or "/import").resolve()
 
-# Immich server reachable from inside the container (same docker network).
-IMMICH_URL = _clean(os.environ.get("IMMICH_URL")) or "http://immich_server:2283"
-IMMICH_API_KEY = _clean(os.environ.get("IMMICH_API_KEY"))
+# --- Immich connection --------------------------------------------------------
+# RAW environment values (None when unset): these decide whether the connection
+# is "locked by env" (both provided => the setup wizard is skipped and the UI
+# can't change them). The effective, wizard-aware values are resolved in
+# ``settings.py`` (env value OR what the user validated in the assistant).
+ENV_IMMICH_URL = _clean(os.environ.get("IMMICH_URL")) or None
+ENV_IMMICH_API_KEY = _clean(os.environ.get("IMMICH_API_KEY")) or None
+ENV_ALBUM_MODE = (_clean(os.environ.get("ALBUM_MODE")).upper() or None)
+
+# Back-compat defaulted values (kept for any external reference); prefer the
+# resolvers in settings.py (settings.immich_url(), settings.immich_api_key()…).
+IMMICH_URL = ENV_IMMICH_URL or "http://immich_server:2283"
+IMMICH_API_KEY = ENV_IMMICH_API_KEY or ""
 
 # Path to the immich-go binary baked into the image.
 IMMICH_GO_BIN = _clean(os.environ.get("IMMICH_GO_BIN")) or "/usr/local/bin/immich-go"

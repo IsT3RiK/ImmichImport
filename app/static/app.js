@@ -1066,9 +1066,26 @@ async function boot() {
   setupLangSwitch();
   I18N.applyStatic(document);   // apply the detected language to static strings
   I18N.onChange(relocalize);    // re-render dynamic surfaces on every switch
-  const cfg = await fetch("/api/config").then((r) => r.json());
+  let cfg = await fetch("/api/config").then((r) => r.json());
   lastCfg = cfg;
   renderMeta(cfg);
+  // First run: gate the whole app behind the setup wizard until a working
+  // Immich connection has been validated and saved. Skipped when the connection
+  // is locked by env vars (setupCompleted is then always true).
+  if (!cfg.setupCompleted && !cfg.lockedByEnv && window.Wizard) {
+    await new Promise((resolve) => {
+      Wizard.open({
+        initial: { url: cfg.immichUrl, albumMode: cfg.albumMode },
+        onCancel: null, // no escape on first run — the app needs a connection
+        onDone: async () => {
+          cfg = await fetch("/api/config").then((r) => r.json());
+          lastCfg = cfg;
+          renderMeta(cfg);
+          resolve();
+        },
+      });
+    });
+  }
   // Initial disk check drives the first tree load (handles "no disk yet").
   await pollDisk();
   refreshSelection();

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, fs, i18n
+from . import config, fs, i18n, immich_check, settings
 from .importer import manager
 
 app = FastAPI(title="Immich Import", docs_url=None, redoc_url=None)
@@ -31,14 +31,100 @@ class ImportRequest(BaseModel):
     dryRun: bool = False
 
 
+class ProbeRequest(BaseModel):
+    url: str
+
+
+class CheckRequest(BaseModel):
+    url: str
+    apiKey: str
+
+
+class CompleteRequest(BaseModel):
+    url: str
+    apiKey: str
+    albumMode: str | None = None
+
+
+class DiscoverRequest(BaseModel):
+    scanCidr: str | None = None
+
+
 @app.get("/api/config")
 def get_config() -> dict:
     return {
         "importRoot": str(config.IMPORT_ROOT),
-        "immichUrl": config.IMMICH_URL,
-        "albumMode": config.ALBUM_MODE,
-        "apiKeySet": bool(config.IMMICH_API_KEY),
+        "immichUrl": settings.immich_url(),
+        "albumMode": settings.album_mode(),
+        "apiKeySet": settings.has_api_key(),
+        "lockedByEnv": settings.LOCKED_BY_ENV,
+        "setupCompleted": settings.is_setup_completed(),
     }
+
+
+# --- setup wizard -----------------------------------------------------------
+@app.get("/api/setup/state")
+def setup_state() -> dict:
+    """Current connection state, so the frontend knows whether to show the wizard."""
+    return {
+        "immichUrl": settings.immich_url(),
+        "hasApiKey": settings.has_api_key(),
+        "albumMode": settings.album_mode(),
+        "lockedByEnv": settings.LOCKED_BY_ENV,
+        "setupCompleted": settings.is_setup_completed(),
+        "apiKeyUrl": settings.api_key_url_for(settings.immich_url()) if settings.immich_url() else "",
+    }
+
+
+@app.post("/api/setup/discover")
+def setup_discover(req: DiscoverRequest, lang: str = Depends(get_lang)) -> dict:
+    """Propose Immich addresses found on the container's network (+ optional scan)."""
+    result = immich_check.discover()
+    cidr = (req.scanCidr or "").strip()
+    result["scanned"] = None
+    if cidr:
+        try:
+            extra = immich_check.scan_subnet(cidr)
+            seen = {c["url"] for c in result["candidates"]}
+            for cand in extra:
+                if cand["url"] not in seen:
+                    result["candidates"].append(cand)
+            result["scanned"] = cidr
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=i18n.tr("err.scanInvalid", lang)) from exc
+    return result
+
+
+@app.post("/api/setup/probe")
+def setup_probe(req: ProbeRequest) -> dict:
+    """Test a hand-typed URL (nothing is saved)."""
+    result = immich_check.probe(req.url)
+    url = result["url"]
+    result["apiKeyUrl"] = settings.api_key_url_for(url) if url else ""
+    return result
+
+
+@app.post("/api/setup/check")
+def setup_check(req: CheckRequest) -> dict:
+    """Validate an API key and report per-scope permissions (nothing is saved)."""
+    return immich_check.check_credentials(req.url, req.apiKey)
+
+
+@app.post("/api/setup/complete")
+def setup_complete(req: CompleteRequest, lang: str = Depends(get_lang)) -> dict:
+    """Re-validate, persist the connection, then close the wizard."""
+    if settings.LOCKED_BY_ENV:
+        raise HTTPException(status_code=403, detail=i18n.tr("err.locked", lang))
+    check = immich_check.check_credentials(req.url, req.apiKey)
+    if not check.get("ok"):
+        # Never save a connection that doesn't work — the whole point of the wizard.
+        raise HTTPException(status_code=400, detail=i18n.tr("err.connInvalid", lang))
+    try:
+        settings.save_connection(req.url, req.apiKey, req.albumMode)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=403, detail=i18n.tr("err.locked", lang)) from exc
+    settings.mark_setup_completed()
+    return {"ok": True}
 
 
 @app.get("/api/status")

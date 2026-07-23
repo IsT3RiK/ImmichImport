@@ -68,6 +68,27 @@ MESSAGES: dict[str, dict[str, str]] = {
         "de": "Auftrag läuft nicht.",
         "it": "L'attività non è in corso.",
     },
+    "err.locked": {
+        "fr": "La connexion est verrouillée par les variables d'environnement.",
+        "en": "The connection is locked by the environment variables.",
+        "es": "La conexión está bloqueada por las variables de entorno.",
+        "de": "Die Verbindung ist durch die Umgebungsvariablen gesperrt.",
+        "it": "La connessione è bloccata dalle variabili d'ambiente.",
+    },
+    "err.connInvalid": {
+        "fr": "La connexion n'a pas pu être validée. Vérifie l'adresse et la clé API.",
+        "en": "The connection could not be validated. Check the address and API key.",
+        "es": "No se pudo validar la conexión. Comprueba la dirección y la clave API.",
+        "de": "Die Verbindung konnte nicht überprüft werden. Prüfe Adresse und API-Schlüssel.",
+        "it": "Impossibile validare la connessione. Controlla l'indirizzo e la chiave API.",
+    },
+    "err.scanInvalid": {
+        "fr": "Sous-réseau invalide (uniquement une plage privée, max /22).",
+        "en": "Invalid subnet (private range only, max /22).",
+        "es": "Subred no válida (solo rango privado, máx. /22).",
+        "de": "Ungültiges Subnetz (nur privater Bereich, max. /22).",
+        "it": "Sottorete non valida (solo intervallo privato, max /22).",
+    },
 }
 
 # Raw English messages raised deep in the code (importer.py) mapped to keys, so
