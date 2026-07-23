@@ -51,6 +51,7 @@ Ici :
 - 🌍 **5 langues** — français, English, español, Deutsch, italiano.
 
 > ⚠️ Application **sans authentification** : à garder sur votre réseau local.
+> Voir [Sécurité](#sécurité).
 
 ---
 
@@ -216,6 +217,37 @@ Variables d'environnement, **toutes facultatives** :
 Le port publié (`8090`) se change dans `docker-compose.yml`.
 
 ---
+
+## Sécurité
+
+**L'application n'a aucune authentification.** Elle est conçue pour tourner sur
+un réseau domestique de confiance. Ne la publiez pas sur Internet et ne la
+placez pas derrière une redirection de port : toute personne pouvant l'atteindre
+peut, sans mot de passe :
+
+- parcourir l'arborescence du disque et lancer un import ;
+- **modifier la connexion Immich** (adresse et clé API) via l'assistant ;
+- faire sonder par le serveur une adresse arbitraire, ou scanner un sous-réseau
+  privé (le scan est bridé aux plages RFC 1918 et à 1024 hôtes, en GET seulement).
+
+Si vous devez y accéder à distance, passez par un VPN (WireGuard, Tailscale) ou
+placez un reverse proxy avec authentification devant.
+
+Ce qui est protégé en revanche :
+
+- **la clé API ne quitte jamais le serveur** — le navigateur apprend seulement
+  qu'une clé est configurée, jamais sa valeur ;
+- **le disque source est monté en lecture seule** : l'app ne peut rien modifier
+  ni supprimer sur vos fichiers ;
+- **chaque chemin est confiné sous `IMPORT_ROOT`**, ce qui bloque les remontées
+  d'arborescence (`../`).
+
+La clé API est stockée en clair dans `/state/settings.json` (volume Docker), au
+même titre qu'une variable d'environnement. Protégez ce volume comme tel.
+
+## Licence
+
+[MIT](LICENSE) — faites-en ce que vous voulez.
 
 ## Sous le capot
 
