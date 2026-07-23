@@ -77,10 +77,8 @@
       "tree.reload": "Recharger l'arborescence",
       "tree.reloadAria": "Recharger",
 
-      "badge.directTitle":
-        "Dans CE dossier uniquement (fichiers posés directement, hors sous-dossiers)",
       "badge.totalTitle":
-        "TOTAL récursif : ce dossier + tous ses sous-dossiers (ce qu'immich-go importera)",
+        "Ce dossier et tous ses sous-dossiers : photos et vidéos qui seront importées",
 
       "side.title": "Sélection & transfert",
       "side.selectedLabel": "Dossiers sélectionnés",
@@ -170,6 +168,7 @@
       "status.liveSim": "⏳ Import (simulation) en cours — affichage en direct…",
 
       "wizard.header": "Configuration",
+      "wizard.reopen": "Assistant de configuration",
       "wizard.progressAria": "Progression",
       "wizard.step.start": "Départ",
       "wizard.step.server": "Serveur",
@@ -298,10 +297,8 @@
       "tree.reload": "Reload the tree",
       "tree.reloadAria": "Reload",
 
-      "badge.directTitle":
-        "In THIS folder only (files placed directly, excluding subfolders)",
       "badge.totalTitle":
-        "Recursive TOTAL: this folder + all its subfolders (what immich-go will import)",
+        "This folder and all its subfolders: photos and videos that will be imported",
 
       "side.title": "Selection & transfer",
       "side.selectedLabel": "Selected folders",
@@ -391,6 +388,7 @@
       "status.liveSim": "⏳ Import (simulation) in progress — live view…",
 
       "wizard.header": "Setup",
+      "wizard.reopen": "Setup assistant",
       "wizard.progressAria": "Progress",
       "wizard.step.start": "Start",
       "wizard.step.server": "Server",
@@ -519,10 +517,8 @@
       "tree.reload": "Recargar el árbol",
       "tree.reloadAria": "Recargar",
 
-      "badge.directTitle":
-        "Solo en ESTA carpeta (archivos colocados directamente, sin subcarpetas)",
       "badge.totalTitle":
-        "TOTAL recursivo: esta carpeta + todas sus subcarpetas (lo que importará immich-go)",
+        "Esta carpeta y todas sus subcarpetas: fotos y vídeos que se importarán",
 
       "side.title": "Selección y transferencia",
       "side.selectedLabel": "Carpetas seleccionadas",
@@ -612,6 +608,7 @@
       "status.liveSim": "⏳ Importación (simulación) en curso — vista en directo…",
 
       "wizard.header": "Configuración",
+      "wizard.reopen": "Asistente de configuración",
       "wizard.progressAria": "Progreso",
       "wizard.step.start": "Inicio",
       "wizard.step.server": "Servidor",
@@ -740,10 +737,8 @@
       "tree.reload": "Baum neu laden",
       "tree.reloadAria": "Neu laden",
 
-      "badge.directTitle":
-        "Nur in DIESEM Ordner (direkt abgelegte Dateien, ohne Unterordner)",
       "badge.totalTitle":
-        "Rekursive GESAMTZAHL: dieser Ordner + alle Unterordner (was immich-go importiert)",
+        "Dieser Ordner und alle Unterordner: Fotos und Videos, die importiert werden",
 
       "side.title": "Auswahl & Transfer",
       "side.selectedLabel": "Ausgewählte Ordner",
@@ -833,6 +828,7 @@
       "status.liveSim": "⏳ Import (Simulation) läuft — Live-Ansicht…",
 
       "wizard.header": "Einrichtung",
+      "wizard.reopen": "Einrichtungsassistent",
       "wizard.progressAria": "Fortschritt",
       "wizard.step.start": "Start",
       "wizard.step.server": "Server",
@@ -961,10 +957,8 @@
       "tree.reload": "Ricarica l'albero",
       "tree.reloadAria": "Ricarica",
 
-      "badge.directTitle":
-        "Solo in QUESTA cartella (file inseriti direttamente, escluse le sottocartelle)",
       "badge.totalTitle":
-        "TOTALE ricorsivo: questa cartella + tutte le sottocartelle (ciò che immich-go importerà)",
+        "Questa cartella e tutte le sottocartelle: foto e video che verranno importati",
 
       "side.title": "Selezione e trasferimento",
       "side.selectedLabel": "Cartelle selezionate",
@@ -1054,6 +1048,7 @@
       "status.liveSim": "⏳ Importazione (simulazione) in corso — vista in diretta…",
 
       "wizard.header": "Configurazione",
+      "wizard.reopen": "Assistente di configurazione",
       "wizard.progressAria": "Avanzamento",
       "wizard.step.start": "Avvio",
       "wizard.step.server": "Server",

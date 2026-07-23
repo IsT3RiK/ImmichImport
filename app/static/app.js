@@ -38,6 +38,7 @@ const $logsFold = document.getElementById("logs-fold");
 const $langBtn = document.getElementById("lang-btn");
 const $langMenu = document.getElementById("lang-menu");
 const $langCurrent = document.getElementById("lang-current");
+const $setupBtn = document.getElementById("setup-btn");
 
 // ---- i18n bindings --------------------------------------------------------
 // Short aliases over the global I18N module (defined in i18n.js). `t` is the
@@ -217,9 +218,7 @@ function pumpCounts() {
     fetch(`/api/count?path=${encodeURIComponent(path)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d && el.isConnected) {
-          el.innerHTML = `<span class="sig">Σ</span> ` + badgeInner(d.photos, d.videos);
-        }
+        if (d && el.isConnected) el.innerHTML = badgeInner(d.photos, d.videos);
       })
       .catch(() => {})
       .finally(() => {
@@ -230,12 +229,13 @@ function pumpCounts() {
 }
 
 // ---- rendering ------------------------------------------------------------
-// Build the inner markup of a count badge: always show photos; only show the
-// video count when there is at least one, to keep the row uncluttered.
+// One uniform badge per folder: always photos AND videos, so a row always reads
+// the same way. The figure covers the folder *and its subfolders* — i.e. exactly
+// what immich-go would import — which is the only number that matters here.
 function badgeInner(photos, videos) {
-  const parts = [`<span class="ic">📷</span>${photos}`];
-  if (videos > 0) parts.push(`<span class="ic">🎬</span>${videos}`);
-  return parts.join(`<span class="dot">·</span>`);
+  return `<span class="ic">📷</span>${I18N.n(photos || 0)}` +
+    `<span class="dot">·</span>` +
+    `<span class="ic">🎬</span>${I18N.n(videos || 0)}`;
 }
 
 function makeNode(child, parentPath) {
@@ -264,17 +264,13 @@ function makeNode(child, parentPath) {
   const spacer = document.createElement("span");
   spacer.className = "spacer";
 
-  const counts = document.createElement("span");
-  counts.className = "badge badge-direct";
-  counts.title = t("badge.directTitle");
-  counts.innerHTML = badgeInner(child.photos, child.videos);
-
+  // Single badge: the recursive photo/video count, filled in by enqueueCount().
   const rec = document.createElement("span");
   rec.className = "badge badge-total";
   rec.title = t("badge.totalTitle");
-  rec.innerHTML = `<span class="sig">Σ</span> …`;
+  rec.innerHTML = `<span class="badge-wait">…</span>`;
 
-  row.append(twisty, box, folder, name, spacer, counts, rec);
+  row.append(twisty, box, folder, name, spacer, rec);
   const childrenEl = document.createElement("div");
   childrenEl.className = "children";
   childrenEl.hidden = true;
@@ -284,7 +280,7 @@ function makeNode(child, parentPath) {
     path, name: child.name, checked: false, indeterminate: false,
     childrenLoaded: false, hasChildren: child.hasChildren,
     parent: parentPath, el: wrap, boxEl: box, rowEl: row, folderEl: folder,
-    childrenEl, twistyEl: twisty, recEl: rec, countEl: counts,
+    childrenEl, twistyEl: twisty, recEl: rec,
   };
   nodes.set(path, node);
 
@@ -1025,6 +1021,35 @@ function setupLangSwitch() {
   });
 }
 
+// ---- setup wizard entry points ---------------------------------------------
+// Reopen the assistant on demand (gear button) to change the Immich server, the
+// API key or the album mode. Cancellable, since a working config already exists.
+async function reopenWizard() {
+  if (!window.Wizard || !lastCfg) return;
+  await new Promise((resolve) => {
+    Wizard.open({
+      initial: { url: lastCfg.immichUrl, albumMode: lastCfg.albumMode },
+      onCancel: () => { Wizard.close(); resolve(); },
+      onDone: resolve,
+    });
+  });
+  await refreshConfig();
+}
+
+// Re-read the server config and repaint everything that depends on it.
+async function refreshConfig() {
+  const cfg = await fetchJson("/api/config");
+  if (!cfg) return;
+  lastCfg = cfg;
+  renderMeta(cfg);
+  // The connection may have changed: rebuild the tree against the new server.
+  if (!running) {
+    diskPresent = null;
+    await pollDisk();
+    refreshSelection();
+  }
+}
+
 // Non-secret config bar (root / Immich URL / album mode / API-key warning).
 function renderMeta(cfg) {
   const key = cfg.apiKeySet
@@ -1044,7 +1069,6 @@ function relocalize() {
   if (lastCfg) renderMeta(lastCfg);
   // Tree badge tooltips (folder names are data and stay; only titles localize).
   for (const node of nodes.values()) {
-    if (node.countEl) node.countEl.title = t("badge.directTitle");
     if (node.recEl) node.recEl.title = t("badge.totalTitle");
   }
   // Selection panel: running job folders vs this tab's checkbox selection.
@@ -1085,6 +1109,11 @@ async function boot() {
         },
       });
     });
+  }
+  // The gear only makes sense when the UI is allowed to change the connection.
+  if (!cfg.lockedByEnv) {
+    $setupBtn.hidden = false;
+    $setupBtn.addEventListener("click", reopenWizard);
   }
   // Initial disk check drives the first tree load (handles "no disk yet").
   await pollDisk();

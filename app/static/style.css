@@ -132,6 +132,12 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 
+/* L'attribut `hidden` doit toujours l'emporter : plusieurs blocs pilotés par
+   JS (bandeau de reprise, progression, récap…) portent un `display:` explicite
+   qui, sans ceci, masquerait le `[hidden] { display: none }` du navigateur —
+   et le bandeau « import interrompu » resterait affiché en permanence. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   font-family: var(--font-sans);
@@ -169,11 +175,10 @@ body {
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
   padding: 16px 22px 8px;
 }
-.brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 13px; flex: 0 0 auto; min-width: 0; }
 .brand-mark {
   display: grid; place-items: center;
   width: 42px; height: 42px;
@@ -189,9 +194,11 @@ body {
 .brand-sub { font-size: 11.5px; color: var(--muted-2); font-weight: 500; }
 
 /* config bar en pilule de verre */
+/* La pilule prend la place disponible et s'étend vers la GAUCHE à mesure que la
+   racine s'allonge, au lieu de rester collée à droite puis d'être tronquée. */
 .context-pill {
   display: flex; align-items: center; gap: 11px;
-  min-width: 0; max-width: 62%;
+  flex: 0 1 auto; min-width: 0; max-width: 100%;
   padding: 9px 16px 9px 11px;
   border-radius: var(--pill);
   border: 1px solid var(--border);
@@ -218,8 +225,11 @@ body {
 }
 .meta .warn { color: var(--warn); font-weight: 600; }
 
-/* right cluster of the top bar: config pill + language switch */
-.topbar-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* right cluster of the top bar: config pill + assistant + language switch */
+.topbar-right {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 10px; flex: 1 1 auto; min-width: 0;
+}
 
 /* ---- language switch (globe) --------------------------------------------- */
 .lang-switch { position: relative; flex: 0 0 auto; }
@@ -419,9 +429,10 @@ main {
 }
 .badge .ic { font-size: 11px; opacity: .85; font-family: var(--font-sans); }
 .badge .dot { opacity: .35; margin: 0 1px; }
-.badge .sig { font-weight: 500; }
-.badge-direct { color: var(--muted); background: var(--panel-2); border-color: var(--border-soft); }
-.badge-total  { color: var(--keep); background: var(--keep-wash); border-color: oklch(0.8 0.19 155 / 0.22); }
+.badge-wait { color: var(--muted-2); letter-spacing: .1em; }
+/* Un seul badge par ligne : photos ET vidéos du dossier, sous-dossiers compris
+   (exactement ce qu'immich-go importera). */
+.badge-total { color: var(--keep); background: var(--keep-wash); border-color: oklch(0.8 0.19 155 / 0.22); }
 
 .children { margin-left: 22px; padding-left: 6px; border-left: 1px solid var(--border-soft); }
 
@@ -724,12 +735,13 @@ main {
 }
 
 /* ============================================================================
-   Setup wizard — first-run configuration assistant (glass modal).
+/* ============================================================================
+   Setup wizard — assistant de première configuration (calqué sur DupFinder).
    ========================================================================== */
 .wiz-overlay {
   position: fixed; inset: 0; z-index: 100;
-  display: flex; align-items: flex-start; justify-content: center;
-  padding: 4vh 16px;
+  display: flex;
+  padding: 24px 16px;
   overflow-y: auto;
   background: oklch(0.16 0.014 285 / 0.72);
   backdrop-filter: blur(14px) saturate(1.2);
@@ -737,10 +749,12 @@ main {
 }
 body.wiz-open { overflow: hidden; }
 
+/* `margin: auto` dans un conteneur flex : centre la fenêtre à l'écran, tout en
+   restant entièrement atteignable au défilement si le contenu est plus haut. */
 .wiz-modal {
+  margin: auto;
   width: 100%; max-width: 660px;
   display: flex; flex-direction: column;
-  max-height: 92vh;
   border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   background: var(--glass-strong);
@@ -750,220 +764,254 @@ body.wiz-open { overflow: hidden; }
   overflow: hidden;
 }
 
-/* header: brand + language + film strip */
+/* --- en-tête : libellé + langue + bande-film ---------------------------- */
 .wiz-head {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px;
-  padding: 15px 20px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--border-soft);
 }
-.wiz-brand { display: flex; align-items: center; gap: 10px; }
-.wiz-brand-ic {
-  display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px;
-  border-radius: 9px; color: var(--accent-ink);
-  background-image: linear-gradient(140deg, var(--accent), var(--accent-2));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
-}
-.wiz-brand-ic svg { width: 17px; height: 17px; }
 .wiz-title {
-  margin: 0; font-size: 12px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .16em; color: var(--text);
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .2em; color: var(--text);
 }
 .wiz-lang {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 0 6px 0 10px; height: 34px;
-  border-radius: var(--pill); border: 1px solid var(--border);
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 0 8px; height: 30px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--panel-2); color: var(--muted);
 }
-.wiz-lang-ic { display: grid; place-items: center; color: var(--accent-bright); }
-.wiz-lang-ic svg { width: 15px; height: 15px; }
+.wiz-lang-ic { display: grid; place-items: center; color: var(--muted); }
+.wiz-lang-ic svg { width: 14px; height: 14px; }
 .wiz-lang select {
   appearance: none; -webkit-appearance: none;
   border: none; background: transparent; color: var(--text);
-  font-family: inherit; font-size: 12.5px; font-weight: 500;
-  padding: 6px 4px; cursor: pointer; outline: none;
+  font-family: var(--font-mono); font-size: 11.5px; font-weight: 500;
+  letter-spacing: .06em; padding: 4px 2px; cursor: pointer; outline: none;
 }
-.wiz-lang select option { background: var(--panel); color: var(--text); }
+.wiz-lang select option { background: var(--panel); color: var(--text); font-family: var(--font-sans); }
 .wiz-strip { margin-left: auto; }
 
 .wiz-film { display: flex; align-items: center; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .wiz-film-item { display: flex; align-items: center; gap: 7px; }
 .wiz-film-dot {
-  display: block; width: 22px; height: 6px; border-radius: 3px;
+  display: block; width: 22px; height: 6px; border-radius: 2px;
   background: var(--card-in); transition: background .3s ease;
 }
-.wiz-film-dot.done { background: var(--keep-2); }
+.wiz-film-dot.done { background: oklch(0.8 0.19 155 / 0.7); }
 .wiz-film-dot.current { background: var(--accent); }
 .wiz-film-label {
   font-family: var(--font-mono); font-size: 10.5px;
-  text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .14em; color: var(--muted);
 }
 
-/* body */
-.wiz-body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 20px; }
-.wiz-step { display: flex; flex-direction: column; gap: 14px; }
-.wiz-h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
-.wiz-lead { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
-.wiz-sub { margin: -6px 0 0; font-size: 13px; color: var(--muted-2); }
+/* --- corps -------------------------------------------------------------- */
+.wiz-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; }
+.wiz-step { display: flex; flex-direction: column; gap: 16px; }
+.wiz-h2 { margin: 0; font-size: 20px; font-weight: 500; letter-spacing: -.01em; color: var(--text); }
+.wiz-lead { margin: 0; font-size: 14px; line-height: 1.65; color: var(--muted); }
+.wiz-sub { margin: -10px 0 0; font-size: 13px; line-height: 1.55; color: var(--muted-2); }
 
-.wiz-bullets { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 13px; }
-.wiz-bullets li { display: flex; align-items: flex-start; gap: 11px; font-size: 14px; color: var(--muted); }
-.wiz-bic { display: grid; place-items: center; width: 20px; height: 20px; flex: 0 0 20px; margin-top: 1px; }
-.wiz-bic svg { width: 18px; height: 18px; }
+.wiz-bullets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 13px; }
+.wiz-bullets li { display: flex; align-items: flex-start; gap: 11px; font-size: 14px; line-height: 1.55; color: var(--muted); }
+.wiz-bic { display: grid; place-items: center; width: 18px; height: 18px; flex: 0 0 18px; margin-top: 2px; }
+.wiz-bic svg { width: 17px; height: 17px; }
 .wiz-bic.accent { color: var(--accent-bright); }
 .wiz-bic.keep { color: var(--keep); }
 
 .wiz-label {
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .07em; color: var(--muted-2);
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .14em; color: var(--muted-2);
+  margin-bottom: -6px;
 }
-.wiz-flabel { font-size: 12px; color: var(--muted-2); margin-bottom: 2px; }
-.wiz-flabel.mt { margin-top: 6px; }
-.wiz-hint { margin: 2px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
+.wiz-flabel { display: block; font-size: 12px; color: var(--muted-2); margin-bottom: 6px; }
+.wiz-hint { margin: 6px 0 0; font-size: 12px; color: var(--muted-2); line-height: 1.5; }
 
-/* cards (server candidates + album modes) */
+/* --- cartes (serveurs trouvés + modes d'album) -------------------------- */
 .wiz-cards { display: flex; flex-direction: column; gap: 8px; }
 .wiz-card {
   display: flex; align-items: flex-start; gap: 12px; width: 100%; text-align: left;
-  padding: 12px 14px; border-radius: var(--radius-md);
+  padding: 11px 13px; border-radius: var(--radius-md);
   border: 1px solid var(--border); background: var(--panel-2);
   color: var(--text); cursor: pointer; font-family: inherit;
   transition: border-color .15s, background .15s;
 }
 .wiz-card:hover { border-color: var(--border-strong); }
 .wiz-card.on { border-color: var(--accent); background: var(--accent-wash); }
-.wiz-card-ic { display: grid; place-items: center; width: 18px; height: 18px; flex: 0 0 18px; margin-top: 1px; color: var(--muted-2); }
+.wiz-card-ic { display: grid; place-items: center; width: 17px; height: 17px; flex: 0 0 17px; margin-top: 2px; color: var(--muted-2); }
 .wiz-card.on .wiz-card-ic { color: var(--accent-bright); }
 .wiz-card-ic svg { width: 17px; height: 17px; }
 .wiz-card-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .wiz-card-url { font-family: var(--font-mono); font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
-.wiz-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text); }
+.wiz-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text); }
 .wiz-card-sub { font-size: 12px; color: var(--muted-2); line-height: 1.45; }
 .wiz-radio {
-  width: 15px; height: 15px; flex: 0 0 15px; margin-top: 2px; border-radius: 50%;
-  border: 2px solid var(--border-strong); transition: border-color .15s, background .15s;
+  width: 14px; height: 14px; flex: 0 0 14px; margin-top: 4px; border-radius: 3px;
+  border: 1px solid var(--border-strong); transition: border-color .15s, background .15s;
 }
-.wiz-radio.on { border-color: var(--accent); background:
-  radial-gradient(circle, var(--accent) 0 40%, transparent 45%); }
+.wiz-radio.on { border-color: var(--accent); background: var(--accent); }
 .wiz-tag {
-  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .1em; color: var(--accent-bright);
-  padding: 2px 6px; border-radius: var(--radius-sm); background: var(--accent-wash);
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .12em; color: var(--accent-bright);
+  padding: 2px 6px; border-radius: 3px; background: var(--card-in);
 }
 
-/* inputs */
+/* --- champs ------------------------------------------------------------- */
 .wiz-panel {
-  display: flex; flex-direction: column; gap: 8px;
+  display: flex; flex-direction: column; gap: 16px;
   padding: 14px; border-radius: var(--radius-md);
-  border: 1px solid var(--border-soft); background: var(--card-in);
+  border: 1px solid var(--border-soft); background: var(--panel-2);
 }
 .wiz-inline { display: flex; gap: 8px; }
 .wiz-inline > .wiz-input { flex: 1; min-width: 0; }
 .wiz-input {
-  width: 100%; padding: 10px 12px;
+  width: 100%; padding: 9px 12px;
   border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--card-in); color: var(--text);
   font-family: var(--font-mono); font-size: 13px; outline: none;
   transition: border-color .15s, box-shadow .15s;
 }
+.wiz-input::placeholder { color: var(--muted-2); }
 .wiz-input:focus { border-color: var(--accent); box-shadow: var(--ring); }
 select.wiz-input { font-family: var(--font-sans); cursor: pointer; }
 
-/* numbered steps (key creation) */
+/* --- étapes numérotées (création de la clé) ----------------------------- */
 .wiz-steps { list-style: none; margin: 0; padding: 14px; display: flex; flex-direction: column; gap: 11px;
-  border-radius: var(--radius-md); border: 1px solid var(--border-soft); background: var(--card-in); }
-.wiz-steps li { display: flex; gap: 12px; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
-.wiz-num { flex: 0 0 auto; font-family: var(--font-mono); font-size: 12px; color: var(--accent-bright); margin-top: 1px; }
+  border-radius: var(--radius-md); border: 1px solid var(--border-soft); background: var(--panel-2); }
+.wiz-steps li { display: flex; gap: 12px; font-size: 13.5px; line-height: 1.6; color: var(--muted); }
+.wiz-steps strong { color: var(--text); font-weight: 600; }
+.wiz-num { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-bright); margin-top: 2px; }
 
-/* feedback blocks */
-.wiz-info, .wiz-warn, .wiz-err, .wiz-kept {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 13px; border-radius: var(--radius-md); padding: 11px 14px; margin: 0;
+/* --- « le lien ne s'ouvre pas ? » --------------------------------------- */
+.wiz-details { margin-top: 10px; font-size: 12px; color: var(--muted-2); }
+.wiz-details > summary { cursor: pointer; list-style: revert; transition: color .15s; }
+.wiz-details > summary:hover { color: var(--muted); }
+.wiz-details-body {
+  margin-top: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-soft); background: var(--panel-2);
+  line-height: 1.55;
 }
-.wiz-info { border: 1px solid var(--border-soft); background: var(--panel-2); color: var(--muted); }
+.wiz-details-body p { margin: 0; }
+.wiz-details-body .wiz-input { font-size: 12px; }
+
+/* --- permissions à cocher dans Immich ----------------------------------- */
+.wiz-permsbox {
+  padding: 13px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-soft); background: var(--panel-2);
+}
+.wiz-permsintro { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.wiz-permsintro strong { color: var(--text); font-weight: 600; }
+.wiz-permslist { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.wiz-permslist li { display: flex; align-items: center; gap: 10px; }
+.wiz-token {
+  flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px;
+  padding: 2px 6px; border-radius: 3px;
+  color: var(--muted); background: var(--card-in); border: 1px solid var(--border-soft);
+}
+.wiz-token.req { color: var(--accent-bright); background: var(--accent-wash); border-color: transparent; }
+.wiz-token-lbl { flex: 1; min-width: 0; font-size: 12px; color: var(--muted-2); }
+.wiz-token-tag {
+  flex: 0 0 auto; font-family: var(--font-mono); font-size: 9.5px;
+  text-transform: uppercase; letter-spacing: .12em; color: var(--muted-2);
+}
+.wiz-token-tag.req { color: var(--accent-bright); }
+.wiz-permsnote {
+  margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border-soft);
+  font-size: 11.5px; line-height: 1.6; color: var(--muted-2);
+}
+
+/* --- retours ------------------------------------------------------------ */
+.wiz-info, .wiz-warn, .wiz-err, .wiz-kept {
+  display: flex; align-items: flex-start; gap: 10px;
+  font-size: 13px; line-height: 1.55; border-radius: var(--radius-md); padding: 11px 13px; margin: 0;
+}
+.wiz-info { border: 1px solid var(--border-soft); background: var(--panel-2); color: var(--muted); align-items: center; }
 .wiz-info svg { width: 16px; height: 16px; flex: 0 0 16px; color: var(--keep); }
-.wiz-warn { border: 1px solid oklch(0.82 0.15 80 / 0.3); background: var(--warn-wash); color: var(--text); align-items: flex-start; }
+.wiz-warn { border: 1px solid oklch(0.82 0.15 80 / 0.3); background: var(--warn-wash); color: var(--text); }
 .wiz-warn svg { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 1px; color: var(--warn); }
 .wiz-err { border: 1px solid oklch(0.66 0.22 22 / 0.3); background: var(--danger-wash); color: oklch(0.82 0.11 22); font-size: 12.5px; }
-.wiz-kept { border: 1px solid var(--border-soft); background: var(--panel-2); color: var(--muted); }
+.wiz-kept { border: 1px solid var(--border-soft); background: var(--panel-2); color: var(--muted); align-items: center; }
 .wiz-mono { font-family: var(--font-mono); color: var(--text); overflow-wrap: anywhere; }
 .wiz-dot-keep {
-  width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%;
+  width: 8px; height: 8px; flex: 0 0 8px; border-radius: 2px;
   background: var(--keep); box-shadow: 0 0 10px -1px var(--keep);
 }
 
-/* credential check result */
-.wiz-check { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: var(--radius-md); }
+/* --- résultat de la vérification de clé --------------------------------- */
+.wiz-check { display: flex; flex-direction: column; gap: 12px; padding: 13px; border-radius: var(--radius-md); }
 .wiz-check.ok { border: 1px solid var(--border-soft); background: var(--panel-2); }
 .wiz-check.bad { border: 1px solid oklch(0.66 0.22 22 / 0.4); background: var(--danger-wash); }
 .wiz-check-head { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 13.5px; color: var(--text); }
 .wiz-check-head.bad { color: oklch(0.82 0.11 22); align-items: flex-start; }
-.wiz-check-head svg { width: 17px; height: 17px; flex: 0 0 17px; margin-top: 1px; }
-.wiz-perms { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
-.wiz-perms li { display: flex; align-items: center; gap: 10px; }
-.wiz-perm-ic { display: grid; place-items: center; width: 16px; height: 16px; flex: 0 0 16px; }
+.wiz-check-head svg { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 1px; }
+.wiz-perms { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.wiz-perms li { display: flex; align-items: flex-start; gap: 10px; }
+.wiz-perm-ic { display: grid; place-items: center; width: 16px; height: 16px; flex: 0 0 16px; margin-top: 1px; }
 .wiz-perm-ic svg { width: 15px; height: 15px; }
 .wiz-perm-ic.ok { color: var(--keep); }
 .wiz-perm-ic.bad { color: var(--danger); }
 .wiz-perm-ic.warn { color: var(--warn); }
-.wiz-perm-lbl { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
-.wiz-perm-tag { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
-.wiz-perm-tag.ok { color: var(--keep); }
-.wiz-perm-tag.missing { color: var(--danger); }
-.wiz-perm-tag.unknown { color: var(--muted-2); }
+.wiz-perm-lbl { flex: 1; min-width: 0; font-size: 13px; color: var(--text); }
+.wiz-perm-state { display: block; font-size: 11.5px; color: var(--muted-2); line-height: 1.45; }
 
-/* recap (ready step) */
+/* --- récapitulatif ------------------------------------------------------ */
 .wiz-recap {
   margin: 0; border-radius: var(--radius-md); overflow: hidden;
-  border: 1px solid var(--border-soft); background: var(--card-in);
+  border: 1px solid var(--border-soft); background: var(--panel-2);
 }
 .wiz-recap > div {
-  display: flex; gap: 12px; padding: 11px 14px;
+  display: flex; gap: 12px; padding: 11px 13px;
   border-bottom: 1px solid var(--border-soft); font-size: 13.5px;
 }
 .wiz-recap > div:last-child { border-bottom: none; }
-.wiz-recap dt { flex: 0 0 96px; color: var(--muted-2); margin: 0; }
+.wiz-recap dt { flex: 0 0 92px; color: var(--muted-2); margin: 0; }
 .wiz-recap dd { flex: 1; min-width: 0; margin: 0; color: var(--text); overflow-wrap: anywhere; }
 
 .wiz-row-btns { display: flex; flex-wrap: wrap; gap: 8px; }
 
-/* buttons */
+/* --- boutons ------------------------------------------------------------ */
 .wiz-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  padding: 10px 16px; border-radius: var(--radius-md);
+  padding: 9px 15px; border-radius: var(--radius-sm);
   border: 1px solid var(--border); background: var(--panel-2);
-  color: var(--text); font-family: inherit; font-size: 13.5px; font-weight: 500;
+  color: var(--text); font-family: inherit; font-size: 13px; font-weight: 500;
   cursor: pointer; transition: all .15s ease; text-decoration: none;
 }
-.wiz-btn svg { width: 16px; height: 16px; flex: 0 0 16px; }
+.wiz-btn svg { width: 15px; height: 15px; flex: 0 0 15px; }
 .wiz-btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--panel-3); }
 .wiz-btn:active:not(:disabled) { transform: translateY(1px); }
 .wiz-btn:focus-visible { outline: none; box-shadow: var(--ring); }
 .wiz-btn:disabled { opacity: .45; cursor: not-allowed; }
-.wiz-btn.sm { padding: 7px 12px; font-size: 12.5px; }
-.wiz-btn.lg { padding: 11px 20px; }
+.wiz-btn.sm { padding: 6px 11px; font-size: 12.5px; color: var(--muted); border-color: transparent; background: transparent; }
+.wiz-btn.sm:hover:not(:disabled) { color: var(--text); background: var(--panel-2); border-color: var(--border-soft); }
+.wiz-btn.sm svg { width: 13px; height: 13px; flex: 0 0 13px; }
+.wiz-btn.lg { padding: 10px 18px; }
 .wiz-btn.outline { flex: 0 0 auto; }
 .wiz-btn.primary {
   background-image: linear-gradient(135deg, var(--accent), var(--accent-2));
   border-color: transparent; color: var(--accent-ink); font-weight: 600;
   box-shadow: inset 0 1px 0 0 rgba(255,255,255,.18), 0 8px 24px -8px oklch(0.68 0.2 288 / 0.6);
 }
-.wiz-btn.primary:hover:not(:disabled) { filter: brightness(1.05); border-color: transparent; background: var(--panel-2); background-image: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.wiz-btn.primary:hover:not(:disabled) { filter: brightness(1.05); border-color: transparent; }
 .wiz-btn.accent {
   align-self: flex-start;
-  border-color: oklch(0.68 0.2 288 / 0.4); background: var(--accent-wash); color: var(--accent-bright); font-weight: 600;
+  background-image: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-color: transparent; color: var(--accent-ink); font-weight: 600;
+  box-shadow: inset 0 1px 0 0 rgba(255,255,255,.18), 0 8px 24px -8px oklch(0.68 0.2 288 / 0.5);
 }
-.wiz-btn.accent:hover { background: oklch(0.68 0.2 288 / 0.24); border-color: var(--accent); }
+.wiz-btn.accent:hover { filter: brightness(1.05); }
 .wiz-link { background: none; border: none; color: var(--muted-2); font-family: inherit; font-size: 12.5px; cursor: pointer; padding: 6px 2px; transition: color .15s; }
 .wiz-link:hover { color: var(--muted); }
 
 .wiz-foot {
   display: flex; align-items: center; gap: 12px;
-  padding: 14px 20px; border-top: 1px solid var(--border-soft);
+  padding: 13px 20px; border-top: 1px solid var(--border-soft);
 }
 .wiz-foot-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 .wiz-spin {
-  width: 15px; height: 15px; flex: 0 0 15px; border-radius: 50%;
+  width: 14px; height: 14px; flex: 0 0 14px; border-radius: 50%;
   border: 2px solid rgba(255,255,255,.3); border-top-color: currentColor;
   animation: spin .7s linear infinite;
 }
@@ -971,11 +1019,12 @@ select.wiz-input { font-family: var(--font-sans); cursor: pointer; }
 
 @media (max-width: 560px) {
   .wiz-overlay { padding: 0; }
-  .wiz-modal { max-width: none; min-height: 100vh; max-height: none; border-radius: 0; border: none; }
+  .wiz-modal { margin: 0; max-width: none; min-height: 100vh; border-radius: 0; border: none; }
   .wiz-head { gap: 10px 12px; padding: 13px 15px; }
   .wiz-strip { order: 3; margin-left: 0; width: 100%; }
   .wiz-body { padding: 18px 15px; }
   .wiz-foot { padding: 13px 15px; }
   .wiz-foot-right { gap: 6px; }
-  .wiz-btn.lg { padding: 11px 14px; }
+  .wiz-btn.lg { padding: 10px 14px; }
+  .wiz-recap dt { flex-basis: 76px; }
 }

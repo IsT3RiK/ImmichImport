@@ -180,6 +180,17 @@ except Exception:  # noqa: BLE001 - optional; discovery degrades gracefully with
     psutil = None
 
 
+def _is_private_v4(ip: str) -> bool:
+    """RFC1918 only — deliberately excludes link-local (169.254/16) APIPA
+    addresses, which belong to disconnected adapters and are never scannable."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in ipaddress.ip_network(net)
+               for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
 def _default_gateway() -> str | None:
     """The container's default gateway = very often the Docker host (Linux)."""
     try:
@@ -272,10 +283,7 @@ def suggested_subnets() -> list[dict]:
     seen: set[str] = set()
 
     for net in _local_networks():
-        try:
-            if not ipaddress.ip_address(net["address"]).is_private:
-                continue
-        except ValueError:
+        if not _is_private_v4(net["address"]):
             continue
         # A /16 is 65k hosts, a /32 is none: fall back to the address's /24,
         # which is what "my local network" means in practice.
@@ -322,7 +330,7 @@ def scan_subnet(cidr: str) -> list[dict]:
     exposed without authentication and must not become a generic scanner.
     """
     net = ipaddress.ip_network(cidr, strict=False)
-    if not net.is_private:
+    if not _is_private_v4(str(net.network_address)):
         raise ValueError("not-private")
     hosts = list(net.hosts())
     if len(hosts) > 1024:
