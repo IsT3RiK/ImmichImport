@@ -9,6 +9,8 @@ Pas de ligne de commande, pas de fichier de configuration à écrire : au premie
 lancement, un **assistant** trouve votre serveur Immich tout seul et vous guide
 pour créer la clé d'accès.
 
+![L'arborescence du disque, avec les compteurs par dossier et le panneau de sélection](docs/app-arborescence.png)
+
 ---
 
 ## Le problème que ça résout
@@ -72,15 +74,31 @@ Deux façons, au choix.
 
 ### Option A — l'assistant (recommandé)
 
-Rien à préparer. Ouvrez l'app, un assistant vous guide en 5 étapes :
+Rien à préparer : ouvrez l'app, l'assistant fait le reste.
 
-1. **Langue** — en haut de l'assistant.
-2. **Serveur** — l'app cherche Immich sur le réseau et vous propose ce qu'elle
-   trouve. Sinon : saisissez l'adresse, ou scannez un réseau entier.
-3. **Clé API** — un bouton ouvre la bonne page dans Immich ; vous collez la clé,
-   l'app vérifie qu'elle fonctionne **avant** d'enregistrer.
-4. **Albums** — un album par dossier, par arborescence, ou aucun.
-5. **Récapitulatif** — et c'est parti.
+**1. Bienvenue** — choisissez votre langue en haut (5 disponibles).
+
+![Écran de bienvenue de l'assistant](docs/wizard-1-bienvenue.png)
+
+**2. Serveur** — l'app cherche Immich sur le réseau et propose ce qu'elle trouve
+(nom de service Docker, machine hôte, chaque interface réseau). Sinon : saisissez
+l'adresse et testez-la, ou scannez un réseau entier.
+
+![Détection du serveur Immich sur le réseau](docs/wizard-2-serveur.png)
+
+**3. Clé API** — un bouton ouvre la bonne page dans Immich, la liste des
+permissions à cocher est affichée, et l'app **vérifie que la clé fonctionne
+avant d'enregistrer quoi que ce soit**.
+
+![Création et vérification de la clé API](docs/wizard-3-cle-api.png)
+
+**4. Albums** — un album par dossier, selon l'arborescence, ou aucun.
+
+![Choix du mode d'album](docs/wizard-4-albums.png)
+
+**5. Récapitulatif** — un dernier coup d'œil, et c'est parti.
+
+![Récapitulatif avant validation](docs/wizard-5-pret.png)
 
 Rien n'est enregistré tant que la connexion n'a pas réellement fonctionné. Le
 résultat est gardé dans le volume `/state`. Vous pouvez rouvrir l'assistant à
