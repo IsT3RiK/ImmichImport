@@ -19,9 +19,12 @@ services:
       - "8090:8080"            # http://<nas-ip>:8090
     environment:
       IMPORT_ROOT: /import
-      IMMICH_URL: ${IMMICH_URL:-http://immich_server:2283}
-      IMMICH_API_KEY: ${IMMICH_API_KEY:?set IMMICH_API_KEY in .env}
-      ALBUM_MODE: ${ALBUM_MODE:-FOLDER}
+      # Leave both of these EMPTY to be guided by the in-app setup assistant on
+      # first launch (it finds Immich on the network and validates the API key).
+      # Setting BOTH freezes the connection and skips the assistant entirely.
+      IMMICH_URL: ${IMMICH_URL:-}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      ALBUM_MODE: ${ALBUM_MODE:-}
       # IMMICH_GO_EXTRA_ARGS: "--include-type=IMAGE"   # optional
     volumes:
       # PARENT directory where the NAS mounts USB disks (e.g. /mnt/@usb), NOT a

@@ -1,181 +1,202 @@
 # Immich Import 📥
 
-Petite web UI locale, autonome et **sans authentification** (réseau local V1),
-pour **sélectionner manuellement** quels dossiers d'un disque externe monté sur
-un NAS importer dans une instance **Immich** self-hosted.
+**Vider un disque externe dans Immich, sans se tromper.**
 
-L'import réel est délégué à [`immich-go`](https://github.com/simulot/immich-go)
-(`upload from-folder`), qui gère nativement le **checksum** et la
-**déduplication** contre les assets déjà présents dans Immich. Ce projet ne
-réimplémente donc *aucune* logique de dédup côté fichiers — juste la sélection.
+Vous branchez un disque USB sur le NAS, vous cochez les dossiers à envoyer, vous
+cliquez. L'application s'occupe du reste et vous montre le transfert en direct.
 
-## Fonctionnalités
+Pas de ligne de commande, pas de fichier de configuration à écrire : au premier
+lancement, un **assistant** trouve votre serveur Immich tout seul et vous guide
+pour créer la clé d'accès.
 
-- 🌲 **Tree view** paresseux (lazy-load) de l'arborescence sous `IMPORT_ROOT`.
-- 🔢 Compteurs **photos / vidéos** par dossier : non-récursif immédiat + total
-  récursif (`Σ`) chargé en arrière-plan.
-- ☑️ Cases à cocher **tri-state** avec cascade parent → enfants, tout en
-  autorisant la sélection d'un sous-dossier précis sans cocher son parent.
-- 🧹 **Déduplication de la sélection** : un enfant déjà couvert par un parent
-  coché n'est pas traité deux fois (côté frontend *et* revalidé côté backend).
-- ▶️ **Rien** n'est importé avant le clic sur **« Importer la sélection »**.
-- ⏱️ Import **asynchrone** (background job) avec **logs live** via SSE.
-- 🔒 **Anti path-traversal** : chaque chemin est résolu et confiné sous
-  `IMPORT_ROOT`. Le disque est monté **read-only** (`:ro`).
-- 🔌 **Détection à chaud** du disque : le dossier parent des USB est monté avec
-  propagation `rslave`, et l'UI poll `/api/status` — brancher/débrancher le
-  disque met à jour l'arborescence en direct, sans redémarrer ni recharger.
-- ⏸️ **Import interruptible et reprenable** : si le disque est débranché en
-  cours d'import (ou le container redémarre), le job s'arrête proprement et
-  l'état est **persisté**. Au rebranchement, l'UI propose **Reprendre** (ne
-  retraite que les dossiers restants) ou **Recommencer à zéro**.
+---
 
-## Architecture
+## Le problème que ça résout
 
-```
-Dockerfile           image python:3.12-slim + binaire immich-go téléchargé au build
-docker-compose.yml   rejoint le réseau Docker existant d'Immich
-app/
-  config.py          lecture des variables d'env
-  fs.py              résolution sûre des chemins, listing, comptage, dédup
-  importer.py        gestionnaire de job + exécution d'immich-go (stream logs)
-  state.py           persistance de la progression (reprise après interruption)
-  main.py            API FastAPI (tree / count / import / jobs / SSE)
-  static/            frontend vanilla (tree view, cascade, logs)
-```
+Importer un vieux disque de photos dans Immich, sans outil, ça veut dire :
+ouvrir un terminal, apprendre les options d'`immich-go`, deviner les chemins,
+et prier pour ne pas créer des milliers de doublons.
 
-## Variables d'environnement
+Ici :
 
-| Variable              | Défaut                          | Rôle |
-| --------------------- | ------------------------------- | ---- |
-| `IMPORT_ROOT`         | `/import`                       | Racine parcourable **dans le container** = dossier **parent** où le NAS monte les USB. Chaque disque branché y apparaît comme sous-dossier. |
-| `IMMICH_URL`          | `http://immich_server:2283`     | URL d'Immich joignable depuis le réseau Docker. |
-| `IMMICH_API_KEY`      | —                               | Clé API Immich (**obligatoire**). |
-| `ALBUM_MODE`          | `FOLDER`                        | `FOLDER` \| `PATH` \| `NONE` → `--folder-as-album`. |
-| `IMMICH_GO_EXTRA_ARGS`| —                               | Args bruts ajoutés à chaque appel immich-go (ex. `--dry-run`). |
-| `STATE_DIR`           | `/state`                        | Dossier **writable** où la progression est persistée (reprise). Volume nommé, **jamais** le disque `:ro`. |
-| `DISK_MONITOR_INTERVAL`| `2`                            | Fréquence (s) de vérification de présence du disque pendant un import. |
-| `PORT`                | `8080`                          | Port HTTP interne. |
+- 🌲 **Vous voyez votre disque** — arborescence dépliable, avec le nombre de
+  photos et vidéos par dossier (sous-dossiers compris).
+- ☑️ **Vous choisissez précisément** — cases à cocher en cascade ; cochez un
+  dossier entier ou juste un sous-dossier.
+- 🛑 **Rien ne part sans votre clic.** Un mode simulation permet même de voir ce
+  qui *serait* envoyé, sans rien envoyer.
+- 🔁 **Aucun doublon** — l'envoi est délégué à
+  [`immich-go`](https://github.com/simulot/immich-go), qui compare les empreintes
+  des fichiers et saute ce qui est déjà dans Immich.
+- ⏸️ **Débranchez sans crainte** — si le disque est retiré en plein import (ou si
+  le conteneur redémarre), la progression est sauvegardée. Au rebranchement,
+  l'app propose de **reprendre là où ça s'est arrêté**.
+- 🌍 **5 langues** — français, English, español, Deutsch, italiano.
 
-## Monter le disque externe côté NAS
+> ⚠️ Application **sans authentification** : à garder sur votre réseau local.
 
-> **On ne monte PAS le disque directement, mais son dossier parent.** C'est ce
-> qui permet le branchement/débranchement à chaud sans redémarrer le container.
-
-La plupart des NAS montent automatiquement les disques USB sous un dossier
-parent (ex. `/mnt/@usb` sur **UGREEN UGOS Pro**, `/volumeUSB*` sur Synology,
-`/media` ou `/mnt` ailleurs). C'est ce **parent** qu'on branche dans le
-container via `IMPORT_HOST_PATH`, en **read-only** et avec propagation
-`rslave` (déjà configuré dans `docker-compose.yml`).
-
-1. Trouvez le dossier parent des USB de votre NAS (en SSH) :
-
-   ```bash
-   ls /mnt/@usb/                              # UGREEN UGOS Pro
-   lsblk -o NAME,MOUNTPOINT,SIZE,LABEL        # voir où les disques se montent
-   ```
-
-2. Mettez ce chemin dans `IMPORT_HOST_PATH` (`.env`). Exemple UGREEN :
-   `IMPORT_HOST_PATH=/mnt/@usb`.
-
-3. Branchez le disque : il apparaît sous ce parent (ex. `/mnt/@usb/MonDisque`)
-   et l'UI le détecte **automatiquement** (pastille verte + arbre rechargé).
-   Aucun montage manuel n'est nécessaire si le NAS auto-monte les USB.
-
-> ⚠️ **Propagation `rslave`** : pour qu'un disque branché *après* le démarrage
-> du container soit visible, le point de montage host doit être « shared ». Sur
-> la plupart des NAS c'est le cas par défaut. Si un disque branché à chaud
-> n'apparaît pas, exécutez une fois côté host :
-> `sudo mount --make-rshared /mnt/@usb` (adaptez le chemin).
+---
 
 ## Démarrage
 
+Il vous faut un NAS (ou une machine) avec Docker, et une instance Immich.
+
 ```bash
-cd /path/to/ImmichImport
+git clone https://github.com/IsT3RiK/ImmichImport.git
+cd ImmichImport
 cp .env.example .env
-# éditez .env : IMPORT_HOST_PATH, IMMICH_API_KEY, IMMICH_NETWORK...
+```
 
-# Trouvez le nom réseau de votre stack Immich :
-docker network ls | grep immich          # ex: immich_default
+Dans `.env`, une seule ligne est vraiment obligatoire : **où votre NAS monte les
+disques USB**.
 
+```bash
+IMPORT_HOST_PATH=/mnt/@usb     # UGREEN UGOS Pro ; adaptez à votre NAS
+IMMICH_NETWORK=immich_default  # docker network ls | grep immich
+```
+
+Puis :
+
+```bash
 docker compose up -d --build
 ```
 
-Ouvrez **http://\<nas-ip\>:8090** (port hôte mappé dans `docker-compose.yml`).
+Ouvrez **http://\<ip-du-nas\>:8090** — l'assistant démarre.
 
-### Intégrer à un compose Immich existant (snippet)
+---
 
-Si vous préférez ajouter le service directement dans le `docker-compose.yml`
-d'Immich (même fichier, même réseau implicite), collez :
+## Configuration
 
-```yaml
-  immich-import:
-    build: ./ImmichImport          # ou image: pré-buildée
-    container_name: immich-import
-    restart: unless-stopped
-    ports:
-      - "8090:8080"
-    environment:
-      IMPORT_ROOT: /import
-      IMMICH_URL: http://immich_server:2283
-      IMMICH_API_KEY: ${IMMICH_API_KEY}
-      ALBUM_MODE: FOLDER
-    volumes:
-      # dossier PARENT des USB (pas un disque précis), :ro + propagation rslave
-      - type: bind
-        source: /mnt/@usb          # UGREEN UGOS Pro ; adaptez à votre NAS
-        target: /import
-        read_only: true
-        bind:
-          propagation: rslave
-      - immich-import-state:/state # writable : progression pour la reprise
-    # même réseau que les autres services Immich -> pas de bloc networks à ajouter
+L'app a besoin de deux choses : **l'adresse de votre Immich** et **une clé API**.
+Deux façons, au choix.
 
-# ... et déclarez le volume nommé au niveau racine du compose :
-# volumes:
-#   immich-import-state:
+### Option A — l'assistant (recommandé)
+
+Rien à préparer. Ouvrez l'app, un assistant vous guide en 5 étapes :
+
+1. **Langue** — en haut de l'assistant.
+2. **Serveur** — l'app cherche Immich sur le réseau et vous propose ce qu'elle
+   trouve. Sinon : saisissez l'adresse, ou scannez un réseau entier.
+3. **Clé API** — un bouton ouvre la bonne page dans Immich ; vous collez la clé,
+   l'app vérifie qu'elle fonctionne **avant** d'enregistrer.
+4. **Albums** — un album par dossier, par arborescence, ou aucun.
+5. **Récapitulatif** — et c'est parti.
+
+Rien n'est enregistré tant que la connexion n'a pas réellement fonctionné. Le
+résultat est gardé dans le volume `/state`. Vous pouvez rouvrir l'assistant à
+tout moment avec le bouton **⚙️** en haut à droite.
+
+### Option B — variables d'environnement
+
+Pour un déploiement figé, sans assistant. Renseignez les deux dans `.env` :
+
+```bash
+IMMICH_URL=http://immich_server:2283
+IMMICH_API_KEY=votre-clé-api
 ```
+
+Quand **les deux** sont définies, la connexion est verrouillée et l'assistant est
+sauté. Une seule des deux n'est qu'une valeur par défaut pré-remplie.
+
+### Clé API Immich
+
+Dans Immich : votre avatar (en haut à droite) → **Paramètres du compte** →
+**Clés API** → **Nouvelle clé API**. Le plus simple est de cocher **Select all**.
+Pour une clé au périmètre minimal :
+
+| Permission     | Rôle                                       |     |
+| -------------- | ------------------------------------------ | --- |
+| `asset.upload` | Envoyer les photos et vidéos               | requis |
+| `asset.read`   | Éviter de renvoyer un fichier déjà présent | conseillé |
+| `album.create` | Créer un album par dossier                 | conseillé |
+| `album.read`   | Retrouver les albums existants             | conseillé |
+
+La clé ne quitte jamais le serveur : le navigateur ne la voit pas.
+
+---
+
+## Le disque externe
+
+> **On ne monte pas le disque, mais son dossier parent.** C'est ce qui permet de
+> brancher et débrancher à chaud sans redémarrer le conteneur.
+
+La plupart des NAS montent les USB sous un dossier parent : `/mnt/@usb` (UGREEN
+UGOS Pro), `/volumeUSB*` (Synology), `/media` ou `/mnt` ailleurs. C'est ce parent
+qu'on met dans `IMPORT_HOST_PATH`. Pour le trouver, en SSH :
+
+```bash
+ls /mnt/@usb/
+lsblk -o NAME,MOUNTPOINT,SIZE,LABEL
+```
+
+Le disque est monté **en lecture seule** : vos fichiers sources ne peuvent pas
+être modifiés.
+
+> Si un disque branché *après* le démarrage du conteneur n'apparaît pas, lancez
+> une fois côté NAS : `sudo mount --make-rshared /mnt/@usb` (adaptez le chemin).
+
+---
 
 ## Utilisation
 
-1. Si aucun disque n'est branché, une bannière l'indique (pastille rouge).
-   Branchez le disque externe : l'arborescence se charge automatiquement
-   (pastille verte). Chaque disque apparaît comme un dossier sous la racine ;
-   dépliez-les (clic sur `▸` ou le nom) pour lazy-loader sous-dossiers et
-   compteurs.
-2. Cochez les dossiers voulus. Cocher un parent coche ses enfants ; vous pouvez
-   décocher un enfant précis (le parent passe en état intermédiaire).
-3. Le panneau **Sélection** montre l'ensemble **minimal** réellement envoyé.
-4. **Importer la sélection** → un job démarre, les logs d'`immich-go`
-   défilent en direct. **Annuler l'import** stoppe le processus en cours.
+1. Branchez le disque : la pastille passe au vert et l'arborescence se charge.
+2. Dépliez les dossiers (clic sur `▸` ou le nom), cochez ce que vous voulez
+   envoyer. Le panneau de droite montre la sélection réelle.
+3. *(optionnel)* Cochez **Mode simulation** pour voir ce qui serait envoyé.
+4. **Importer la sélection** — les compteurs et le temps restant s'affichent en
+   direct. **Annuler l'import** stoppe proprement.
 
-## Reprise après débranchement
+Un seul import à la fois. Si vous rechargez la page ou revenez plus tard,
+l'affichage se raccroche automatiquement à l'import en cours.
 
-L'import est **interruptible et reprenable**, dossier par dossier :
+### Reprise après débranchement
 
-- Un thread surveille la présence du disque (`DISK_MONITOR_INTERVAL`, 2 s par
-  défaut). Si le disque **disparaît en cours d'import**, immich-go est stoppé et
-  le job passe en état `interrupted`. La progression (quels dossiers sont
-  `done`) est **persistée** dans le volume `/state`.
-- Idem si le **container redémarre** en plein import : au redémarrage, l'état
-  `running` orphelin est traité comme une interruption reprenable.
-- Au **rebranchement** du disque, l'UI affiche un bandeau : combien de dossiers
-  étaient déjà terminés, combien restent, et deux boutons :
-  - **Reprendre** → ne relance **que les dossiers non terminés**. Pour un
-    dossier laissé à moitié, immich-go recalcule les checksums et **saute les
-    fichiers déjà envoyés** — donc pas de doublon ni de retéléversement.
-  - **Recommencer à zéro** → jette l'état persisté ; vous refaites une sélection.
+Si le disque disparaît en cours d'import, le job s'arrête et la progression est
+sauvegardée. Au rebranchement, un bandeau propose :
 
-> La granularité de reprise est le **dossier** (unité de sélection). À
-> l'intérieur d'un dossier, la reprise fine est assurée gratuitement par la
-> déduplication par checksum d'immich-go côté serveur.
+- **Reprendre** — ne retraite que les dossiers non terminés. Pour un dossier
+  laissé à moitié, `immich-go` saute les fichiers déjà envoyés.
+- **Recommencer à zéro** — oublie l'état et repart d'une nouvelle sélection.
 
-## Notes & limites (V1)
+---
 
-- **Un seul import à la fois** (429/409 si un job tourne déjà) — volontaire, les
-  imports concurrents se battraient sur la pause des jobs Immich.
-- Pas d'auth : à n'exposer que sur le LAN. Ne pas publier tel quel sur Internet.
-- Le total récursif `Σ` est calculé à la volée ; sur de très gros dossiers il
-  peut mettre quelques secondes à s'afficher (chargé en tâche de fond, 4 en //).
-- Astuce test : mettez `IMMICH_GO_EXTRA_ARGS=--dry-run` pour valider la
-  sélection sans rien téléverser.
+## Réglages avancés
+
+Variables d'environnement, **toutes facultatives** :
+
+| Variable                | Défaut            | Rôle |
+| ----------------------- | ----------------- | ---- |
+| `IMPORT_HOST_PATH`      | —                 | Dossier **hôte** parent des disques USB (le seul réglage vraiment nécessaire). |
+| `IMMICH_URL`            | —                 | Adresse d'Immich (sans `/api`). Voir [Configuration](#configuration). |
+| `IMMICH_API_KEY`        | —                 | Clé API Immich. |
+| `ALBUM_MODE`            | `FOLDER`          | `FOLDER` \| `PATH` \| `NONE` — choisi dans l'assistant. |
+| `IMMICH_NETWORK`        | `immich_default`  | Réseau Docker de votre stack Immich. |
+| `IMPORT_ROOT`           | `/import`         | Racine parcourue **dans le conteneur**. |
+| `STATE_DIR`             | `/state`          | Volume **inscriptible** : configuration + progression. |
+| `IMMICH_GO_EXTRA_ARGS`  | —                 | Arguments bruts ajoutés à chaque appel `immich-go`. |
+| `DISK_MONITOR_INTERVAL` | `2`               | Fréquence (s) de vérification de présence du disque. |
+| `PORT`                  | `8080`            | Port HTTP interne au conteneur. |
+
+Le port publié (`8090`) se change dans `docker-compose.yml`.
+
+---
+
+## Sous le capot
+
+```
+Dockerfile           python:3.12-slim + binaire immich-go
+docker-compose.yml   rejoint le réseau Docker d'Immich
+app/
+  main.py            API FastAPI (arbre, comptage, import, SSE, assistant)
+  fs.py              résolution sûre des chemins, listing, comptage
+  importer.py        exécution d'immich-go, suivi de progression
+  settings.py        connexion : env ou assistant, persistée dans /state
+  immich_check.py    découverte réseau, test de connexion, contrôle de la clé
+  state.py           progression persistée (reprise après interruption)
+  i18n.py            messages serveur traduits
+  static/            frontend vanilla (aucun build, aucun CDN, hors-ligne)
+```
+
+Quelques garde-fous : chaque chemin est confiné sous `IMPORT_ROOT`
+(anti-traversée), le disque est monté en lecture seule, le scan réseau est
+limité aux plages privées, et la clé API reste côté serveur.
