@@ -1,6 +1,10 @@
-# Immich Import 📥
+<p align="center">
+  <img src="docs/logo.png" alt="ImmichImport" width="200">
+</p>
 
-**Vider un disque externe dans Immich, sans se tromper.**
+<h1 align="center">Immich Import</h1>
+
+<p align="center"><strong>Vider un disque externe dans Immich, sans se tromper.</strong></p>
 
 Vous branchez un disque USB sur le NAS, vous cochez les dossiers à envoyer, vous
 cliquez. L'application s'occupe du reste et vous montre le transfert en direct.
@@ -9,7 +13,18 @@ Pas de ligne de commande, pas de fichier de configuration à écrire : au premie
 lancement, un **assistant** trouve votre serveur Immich tout seul et vous guide
 pour créer la clé d'accès.
 
-![L'arborescence du disque, avec les compteurs par dossier et le panneau de sélection](docs/app-arborescence.png)
+## Aperçu
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/wizard-1-bienvenue.png" alt="Assistant de configuration"><br><em>1. Un assistant vous configure l'app</em></td>
+    <td width="50%"><img src="docs/app-arborescence.png" alt="Arborescence et sélection"><br><em>2. Vous cochez les dossiers à envoyer</em></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/app-import-en-cours.png" alt="Import en cours"><br><em>3. Le transfert se suit en direct</em></td>
+    <td width="50%"><img src="docs/app-import-termine.png" alt="Récapitulatif de fin"><br><em>4. Un récapitulatif clôt l'import</em></td>
+  </tr>
+</table>
 
 ---
 
@@ -77,8 +92,6 @@ Deux façons, au choix.
 Rien à préparer : ouvrez l'app, l'assistant fait le reste.
 
 **1. Bienvenue** — choisissez votre langue en haut (5 disponibles).
-
-![Écran de bienvenue de l'assistant](docs/wizard-1-bienvenue.png)
 
 **2. Serveur** — l'app cherche Immich sur le réseau et propose ce qu'elle trouve
 (nom de service Docker, machine hôte, chaque interface réseau). Sinon : saisissez
@@ -165,14 +178,9 @@ Le disque est monté **en lecture seule** : vos fichiers sources ne peuvent pas
    direct. **Annuler l'import** stoppe proprement.
 
 Pendant le transfert : avancement global, temps restant, cadence, et le détail
-dossier par dossier (✅ terminé, ⏳ en cours, • en attente).
-
-![Import en cours, avec avancement, compteurs et état de chaque dossier](docs/app-import-en-cours.png)
-
-À la fin, un récapitulatif : ce qui est parti, ce qui a été ignoré parce que
-déjà présent, les erreurs éventuelles et la durée.
-
-![Récapitulatif de fin d'import](docs/app-import-termine.png)
+dossier par dossier (✅ terminé, ⏳ en cours, • en attente). À la fin, un
+récapitulatif indique ce qui est parti, ce qui a été ignoré parce que déjà
+présent, les erreurs éventuelles et la durée — voir l'[aperçu](#aperçu).
 
 Un seul import à la fois. Si vous rechargez la page ou revenez plus tard,
 l'affichage se raccroche automatiquement à l'import en cours.
