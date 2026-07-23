@@ -164,6 +164,16 @@ Le disque est monté **en lecture seule** : vos fichiers sources ne peuvent pas
 4. **Importer la sélection** — les compteurs et le temps restant s'affichent en
    direct. **Annuler l'import** stoppe proprement.
 
+Pendant le transfert : avancement global, temps restant, cadence, et le détail
+dossier par dossier (✅ terminé, ⏳ en cours, • en attente).
+
+![Import en cours, avec avancement, compteurs et état de chaque dossier](docs/app-import-en-cours.png)
+
+À la fin, un récapitulatif : ce qui est parti, ce qui a été ignoré parce que
+déjà présent, les erreurs éventuelles et la durée.
+
+![Récapitulatif de fin d'import](docs/app-import-termine.png)
+
 Un seul import à la fois. Si vous rechargez la page ou revenez plus tard,
 l'affichage se raccroche automatiquement à l'import en cours.
 
