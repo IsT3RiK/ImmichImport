@@ -30,6 +30,8 @@ services:
       IMPORT_EXCLUDE: ${IMPORT_EXCLUDE:-}
       # Log verbosity on stdout / `docker logs`: DEBUG | INFO | WARNING | ERROR.
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # On an Immich server error: continue | stop | <max number of errors>.
+      IMPORT_ON_ERRORS: ${IMPORT_ON_ERRORS:-continue}
       # IMMICH_GO_EXTRA_ARGS: "--include-type=IMAGE"   # optional
     volumes:
       # PARENT directory where the NAS mounts USB disks (e.g. /mnt/@usb), NOT a

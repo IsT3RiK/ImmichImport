@@ -543,13 +543,19 @@ function escapeHtml(s) {
 // what the server reports — no more replaying thousands of log lines to rebuild
 // the totals on reload (that was the reload-latency culprit). The raw log is
 // kept only as a bounded tail behind a collapsed "details" fold, for debugging.
+// Throughput is measured over a sliding window, not between two SSE ticks.
+// Tick-to-tick deltas made the ETA useless: a burst of duplicates (thousands a
+// second) collapsed it to "3 s", then one 20 MB upload with no progress for a
+// few ticks blew it up to "1 h 30". A 90-second window averages both phases,
+// and the ETA is only shown once enough of it has been observed.
+const RATE_WINDOW_MS = 90000;
+const ETA_MIN_SPAN_S = 20;
 const S = {
   active: false, startTs: 0, dryRun: false,
-  // client-side upload-rate smoothing for the ETA readout
-  rate: 0, lastUploaded: 0, lastRateTs: 0, flatTicks: 0,
-  // processed-rate smoothing (uploads + dups + errors + …) drives the ETA,
-  // so the remaining time still counts down while immich-go skips duplicates.
-  procRate: 0, lastProcessed: 0,
+  // [{t, p, u}] samples inside the window; rates are derived from its ends.
+  samples: [], windowSpan: 0, etaShown: 0, lastRateTs: 0,
+  rate: 0, flatTicks: 0,
+  procRate: 0,
   // Exact number of assets to import, summed from the tree's recursive counts
   // (authoritative, known up-front) — NOT immich-go's slow, drip-fed `found`.
   // This is what makes the ETA trustworthy.
@@ -615,11 +621,12 @@ function startStats(dryRun) {
   S.startTs = Date.now();
   S.dryRun = !!dryRun;
   S.rate = 0;
-  S.lastUploaded = 0;
-  S.lastRateTs = Date.now();
   S.flatTicks = 0;
   S.procRate = 0;
-  S.lastProcessed = 0;
+  S.lastRateTs = Date.now();
+  S.samples = [];
+  S.windowSpan = 0;
+  S.etaShown = 0;
   S.expectedTotal = 0;
   clearLogs();
   $recap.hidden = true;
@@ -678,25 +685,28 @@ function updateLiveHead(p, remaining) {
   const dt = (now - S.lastRateTs) / 1000;
   if (dt >= 1) {
     // Upload rate (for the "N /s" readout and the phase heuristic).
-    const dUp = (p.uploaded || 0) - S.lastUploaded;
-    if (dUp > 0) {
-      const inst = dUp / dt;
-      S.rate = S.rate ? S.rate * 0.6 + inst * 0.4 : inst;
-      S.flatTicks = 0;
-    } else {
-      S.flatTicks++;
-    }
-    S.lastUploaded = p.uploaded || 0;
-    // Processed rate (uploads + dups + errors + …) drives the ETA, so the
-    // countdown keeps moving while immich-go is only skipping duplicates.
     const proc = processedCount(p);
-    const dProc = proc - S.lastProcessed;
-    if (dProc > 0) {
-      const instP = dProc / dt;
-      S.procRate = S.procRate ? S.procRate * 0.6 + instP * 0.4 : instP;
+    const up = p.uploaded || 0;
+    S.samples.push({ t: now, p: proc, u: up });
+    while (S.samples.length > 2 && now - S.samples[0].t > RATE_WINDOW_MS) {
+      S.samples.shift();
     }
-    S.lastProcessed = proc;
-    S.lastRateTs = now;
+    const first = S.samples[0];
+    const span = (now - first.t) / 1000;
+    S.windowSpan = span;
+    if (span >= 1) {
+      // Rate across the whole window: a stall lowers it gradually instead of
+      // leaving a stale optimistic value in place, and a duplicate burst can't
+      // spike it either — both are already averaged in.
+      const procRate = Math.max(0, (proc - first.p) / span);
+      const upRate = Math.max(0, (up - first.u) / span);
+      S.procRate = S.procRate ? S.procRate * 0.75 + procRate * 0.25 : procRate;
+      S.rate = S.rate ? S.rate * 0.75 + upRate * 0.25 : upRate;
+      // "Nothing is being uploaded but assets keep being classified" = the
+      // duplicate-skipping phase. Derived from the window, not from tick luck.
+      S.flatTicks = (S.rate < 0.05 && S.procRate > 0.2) ? S.flatTicks + 1 : 0;
+    }
+    S.lastRateTs = now;   // échantillonnage cadencé à ~1 Hz
   }
   let phase, indeterminate = false;
   if (p.readPct < 100 && p.found > 0 && (p.uploaded || 0) === 0) {
@@ -720,8 +730,16 @@ function updateLiveHead(p, remaining) {
   // upload rate separately when files are actively being sent.
   let extra = "";
   const etaRate = S.procRate > 0 ? S.procRate : S.rate;
-  if (remaining > 0 && etaRate > 0) {
-    extra = t("eta.remaining", { time: fmtDuration(remaining / etaRate) });
+  // No ETA before the window holds enough history: a number invented from two
+  // seconds of observation is worse than no number at all.
+  if (remaining > 0 && etaRate > 0 && S.windowSpan >= ETA_MIN_SPAN_S) {
+    const eta = remaining / etaRate;
+    // Hysteresis: only move the displayed value on a real change, so it stops
+    // flickering between two roundings on every tick.
+    if (!S.etaShown || Math.abs(eta - S.etaShown) / S.etaShown > 0.15) {
+      S.etaShown = eta;
+    }
+    extra = t("eta.remaining", { time: fmtDuration(coarseSeconds(S.etaShown)) });
     if (S.rate > 0 && S.flatTicks < 3) extra += " · " + t("eta.rate", { rate: Math.round(S.rate) });
   } else if (S.rate > 0 && S.flatTicks < 3) {
     extra = t("eta.rate", { rate: Math.round(S.rate) });
@@ -733,6 +751,15 @@ function chip(icon, label, val, cls) {
   const shown = typeof val === "number" ? I18N.n(val) : val;
   return `<span class="stat-chip ${cls || ""}"><span class="ic">${icon}</span>` +
     `<b>${shown}</b> <span class="lbl">${label}</span></span>`;
+}
+
+// Round an ETA to a precision it actually deserves: nobody can act on
+// "1 h 23 min 47 s", and the seconds digit changing twice a second is what made
+// the old readout look broken.
+function coarseSeconds(secs) {
+  if (secs < 90) return 60;
+  if (secs < 3600) return Math.round(secs / 60) * 60;
+  return Math.round(secs / 300) * 300;
 }
 
 function fmtDuration(secs) {
@@ -763,6 +790,7 @@ function finishStats(d) {
   // Retain the result so relocalize() can re-render the recap in a new language
   // without recomputing the timings.
   S.recapData = d;
+  S.recapExpected = S.expectedTotal;  // ce que l'arborescence annonçait
   S.recapSecs = secs;
   S.recapDry = S.dryRun;
   S.errorsOpen = false;   // chaque job repart avec son panneau replié
@@ -801,6 +829,11 @@ function renderRecap() {
         `</div>`
       : recapRow(t("recap.errors"), 0)) +
     recapRow(t("recap.found"), p.found || 0) +
+    // What the tree promised, next to what immich-go actually looked at. A gap
+    // here means the run stopped early or the two filters disagree — either
+    // way it must be visible, not left for the user to notice weeks later.
+    ((S.recapExpected > 0 && Math.abs(S.recapExpected - (p.found || 0)) > 1)
+      ? recapRow(t("recap.expected"), S.recapExpected) : "") +
     // Files immich-go saw on disk and dropped BEFORE any upload: banned by a
     // pattern, unknown type, or unsupported format. Without this row the gap
     // between what the tree announced and "total found" is invisible.

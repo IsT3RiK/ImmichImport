@@ -524,6 +524,9 @@ class JobManager:
             "--server", settings.immich_url(),
             "--api-key", settings.immich_api_key(),
             "--recursive",
+            # Never let one server hiccup truncate the whole import (see
+            # config.ON_ERRORS). immich-go's default is "stop".
+            f"--on-errors={config.ON_ERRORS}",
         ]
         # Forward OUR extra exclusions to immich-go so both sides filter the
         # same set, from the same source of truth (config.EXTRA_BANNED_PATTERNS

@@ -215,6 +215,7 @@ Variables d'environnement, **toutes facultatives** :
 | `IMPORT_EXCLUDE`        | voir ci-dessous   | Motifs d'exclusion **supplémentaires**, séparés par des virgules. |
 | `LOG_LEVEL`             | `INFO`            | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` — verbosité de `docker logs`. |
 | `LOG_KEEP`              | `20000`           | Lignes de log conservées en mémoire pour l'affichage web. |
+| `IMPORT_ON_ERRORS`      | `continue`        | Sur erreur du serveur Immich : `continue` \| `stop` \| nombre max. |
 | `PORT`                  | `8080`            | Port HTTP interne au conteneur. |
 
 Le port publié (`8090`) se change dans `docker-compose.yml`.

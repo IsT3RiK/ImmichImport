@@ -49,6 +49,18 @@ DISK_MONITOR_INTERVAL = float(_clean(os.environ.get("DISK_MONITOR_INTERVAL")) or
 # Album strategy passed to immich-go: FOLDER, PATH or NONE.
 ALBUM_MODE = (_clean(os.environ.get("ALBUM_MODE")) or "FOLDER").upper()
 
+# What immich-go does when the SERVER returns an error: "stop" (its own
+# default), "continue", or a maximum number of errors to tolerate.
+#
+# immich-go ships with "stop", which aborts the WHOLE run on the very first
+# server error - and since discovery runs alongside uploading, everything not
+# yet discovered is simply never seen. One dropped connection on a 18 000-photo
+# folder ended the import after 511 files, with no indication that 17 500 had
+# never been looked at. For an unattended import over a slow USB disk that is
+# the wrong default: a transient network glitch must not silently truncate the
+# job. Errors are listed per file in the recap, so nothing is hidden by going on.
+ON_ERRORS = _clean(os.environ.get("IMPORT_ON_ERRORS")) or "continue"
+
 # Extra raw args appended to every immich-go invocation (advanced).
 IMMICH_GO_EXTRA_ARGS = shlex.split(_clean(os.environ.get("IMMICH_GO_EXTRA_ARGS")))
 
