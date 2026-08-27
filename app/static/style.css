@@ -279,12 +279,17 @@ body {
 
 /* ---- footer credit ------------------------------------------------------- */
 .credit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;  /* version à gauche, crédit à droite */
+  gap: 12px;
   padding: 10px 24px;
   color: var(--muted-2);
   font-size: 11px;
   text-align: right;
   letter-spacing: .04em;
 }
+.app-version { font-variant-numeric: tabular-nums; }
 .credit-heart { color: var(--danger); }
 .credit-link {
   color: var(--muted); text-decoration: none; font-weight: 600;

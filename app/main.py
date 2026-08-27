@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, fs, i18n, immich_check, logging_setup, settings
+from . import config, fs, i18n, immich_check, logging_setup, settings, version
 from .importer import manager
 
 logging_setup.configure(config.LOG_LEVEL)
@@ -103,6 +103,7 @@ class DiscoverRequest(BaseModel):
 @app.get("/api/config")
 def get_config() -> dict:
     return {
+        "version": version.__version__,
         "importRoot": str(config.IMPORT_ROOT),
         "immichUrl": settings.immich_url(),
         "albumMode": settings.album_mode(),

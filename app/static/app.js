@@ -39,6 +39,7 @@ const $langBtn = document.getElementById("lang-btn");
 const $langMenu = document.getElementById("lang-menu");
 const $langCurrent = document.getElementById("lang-current");
 const $setupBtn = document.getElementById("setup-btn");
+const $appVersion = document.getElementById("app-version");
 
 // ---- i18n bindings --------------------------------------------------------
 // Short aliases over the global I18N module (defined in i18n.js). `t` is the
@@ -1104,6 +1105,9 @@ async function refreshConfig() {
 
 // Non-secret config bar (root / Immich URL / album mode / API-key warning).
 function renderMeta(cfg) {
+  // Bottom-left version tag: the container is built straight from GitHub, so
+  // this is how you tell which build is actually running.
+  $appVersion.textContent = cfg.version ? `v${cfg.version}` : "";
   const key = cfg.apiKeySet
     ? ""
     : ` · <span class="warn">${t("meta.apiKeyMissing")}</span>`;
