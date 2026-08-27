@@ -11,7 +11,7 @@ let running = false;
 // entries hold no importable file at all. They are hidden once their recursive
 // count comes back at zero, and the useful one unfolds by itself — so plugging a
 // disk in lands you straight on your photos instead of on a list of sdX.
-const AUTO_EXPAND_DEPTH = 3;        // niveaux dépliés automatiquement
+const AUTO_EXPAND_DEPTH = 1;        // niveaux dépliés automatiquement
 const AUTO_EXPAND_MAX_FOLDERS = 40; // garde-fou: dossiers ouverts au maximum
 let treeGeneration = 0;   // incrémenté à chaque reconstruction: annule le travail en cours
 let autoExpandBudget = 0;
