@@ -91,6 +91,12 @@
         one: "<b>{count}</b> dossier en cours d'import :",
         other: "<b>{count}</b> dossiers en cours d'import :",
       },
+      // Same list, once the job is over: the panel keeps showing what
+      // was imported instead of falling back to "no folder selected".
+      "selection.imported": {
+        one: "<b>{count}</b> dossier du dernier import :",
+        other: "<b>{count}</b> dossiers du dernier import :",
+      },
 
       "dry.tooltip":
         "Simule l'import sans rien téléverser : immich-go affiche ce qu'il ferait, aucune modification dans Immich.",
@@ -149,6 +155,8 @@
       "recap.unsupported": "🚫 Fichiers non supportés",
       "recap.errors": "⚠️ Erreurs",
       "recap.found": "📦 Total trouvé",
+      "recap.discSkipped": "🚷 Écartés avant analyse",
+      "recap.discDetail": " (bannis {banned}, inconnus {unknown}, non gérés {unsupported})",
       "recap.time": "⏱ Temps de transfert",
       "recap.simNote": "🧪 Simulation : aucun fichier n'a réellement été envoyé.",
 
@@ -311,6 +319,12 @@
         one: "<b>{count}</b> folder being imported:",
         other: "<b>{count}</b> folders being imported:",
       },
+      // Same list, once the job is over: the panel keeps showing what
+      // was imported instead of falling back to "no folder selected".
+      "selection.imported": {
+        one: "<b>{count}</b> folder from the last import:",
+        other: "<b>{count}</b> folders from the last import:",
+      },
 
       "dry.tooltip":
         "Simulates the import without uploading anything: immich-go shows what it would do, no change in Immich.",
@@ -369,6 +383,8 @@
       "recap.unsupported": "🚫 Unsupported files",
       "recap.errors": "⚠️ Errors",
       "recap.found": "📦 Total found",
+      "recap.discSkipped": "🚷 Skipped before analysis",
+      "recap.discDetail": " (banned {banned}, unknown {unknown}, unsupported {unsupported})",
       "recap.time": "⏱ Transfer time",
       "recap.simNote": "🧪 Simulation: no file was actually sent.",
 
@@ -531,6 +547,12 @@
         one: "<b>{count}</b> carpeta importándose:",
         other: "<b>{count}</b> carpetas importándose:",
       },
+      // Same list, once the job is over: the panel keeps showing what
+      // was imported instead of falling back to "no folder selected".
+      "selection.imported": {
+        one: "<b>{count}</b> carpeta de la última importación:",
+        other: "<b>{count}</b> carpetas de la última importación:",
+      },
 
       "dry.tooltip":
         "Simula la importación sin subir nada: immich-go muestra lo que haría, sin cambios en Immich.",
@@ -589,6 +611,8 @@
       "recap.unsupported": "🚫 Archivos no compatibles",
       "recap.errors": "⚠️ Errores",
       "recap.found": "📦 Total encontrado",
+      "recap.discSkipped": "🚷 Descartados antes del análisis",
+      "recap.discDetail": " (prohibidos {banned}, desconocidos {unknown}, no admitidos {unsupported})",
       "recap.time": "⏱ Tiempo de transferencia",
       "recap.simNote": "🧪 Simulación: no se envió ningún archivo realmente.",
 
@@ -751,6 +775,12 @@
         one: "<b>{count}</b> Ordner wird importiert:",
         other: "<b>{count}</b> Ordner werden importiert:",
       },
+      // Same list, once the job is over: the panel keeps showing what
+      // was imported instead of falling back to "no folder selected".
+      "selection.imported": {
+        one: "<b>{count}</b> Ordner aus dem letzten Import:",
+        other: "<b>{count}</b> Ordner aus dem letzten Import:",
+      },
 
       "dry.tooltip":
         "Simuliert den Import, ohne etwas hochzuladen: immich-go zeigt, was es tun würde, keine Änderung in Immich.",
@@ -809,6 +839,8 @@
       "recap.unsupported": "🚫 Nicht unterstützte Dateien",
       "recap.errors": "⚠️ Fehler",
       "recap.found": "📦 Insgesamt gefunden",
+      "recap.discSkipped": "🚷 Vor der Analyse übersprungen",
+      "recap.discDetail": " (gesperrt {banned}, unbekannt {unknown}, nicht unterstützt {unsupported})",
       "recap.time": "⏱ Transferdauer",
       "recap.simNote": "🧪 Simulation: es wurde keine Datei tatsächlich gesendet.",
 
@@ -971,6 +1003,12 @@
         one: "<b>{count}</b> cartella in importazione:",
         other: "<b>{count}</b> cartelle in importazione:",
       },
+      // Same list, once the job is over: the panel keeps showing what
+      // was imported instead of falling back to "no folder selected".
+      "selection.imported": {
+        one: "<b>{count}</b> cartella dell'ultimo import:",
+        other: "<b>{count}</b> cartelle dell'ultimo import:",
+      },
 
       "dry.tooltip":
         "Simula l'importazione senza caricare nulla: immich-go mostra cosa farebbe, nessuna modifica in Immich.",
@@ -1029,6 +1067,8 @@
       "recap.unsupported": "🚫 File non supportati",
       "recap.errors": "⚠️ Errori",
       "recap.found": "📦 Totale trovato",
+      "recap.discSkipped": "🚷 Esclusi prima dell'analisi",
+      "recap.discDetail": " (vietati {banned}, sconosciuti {unknown}, non supportati {unsupported})",
       "recap.time": "⏱ Tempo di trasferimento",
       "recap.simNote": "🧪 Simulazione: nessun file è stato realmente inviato.",
 

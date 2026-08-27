@@ -4,13 +4,22 @@ All paths exchanged with the frontend are POSIX-style **relative** paths rooted
 at IMPORT_ROOT (the mounted disk). The empty string / "." denotes the root
 itself. Absolute paths never leave this module: they are resolved here and
 validated to stay confined under IMPORT_ROOT (anti path-traversal).
+
+Counting rules live in ``config`` and mirror immich-go's own supported-media
+table and ban list, so that what the tree promises is what immich-go imports.
+``scan_report`` exists to explain any remaining gap in plain numbers.
 """
 from __future__ import annotations
 
+import logging
 import os
+import time
+from collections import Counter
 from pathlib import Path, PurePosixPath
 
 from . import config
+
+log = logging.getLogger("immichimport.fs")
 
 
 class UnsafePathError(ValueError):
@@ -50,6 +59,15 @@ def _classify(name: str) -> str | None:
     if ext in config.VIDEO_EXTS:
         return "video"
     return None
+
+
+def banned_reason(rel_path: str, is_dir: bool) -> str | None:
+    """Return the ban pattern excluding this entry, or None if it is kept.
+
+    Applied to the SAME relative paths on both sides of the fence: here for the
+    tree/counts, and inside immich-go for the actual import.
+    """
+    return config.BANNED.match(rel_path, is_dir)
 
 
 def root_status() -> dict:
@@ -103,9 +121,10 @@ def list_children(rel: str) -> dict:
     """List immediate sub-folders of ``rel`` with non-recursive asset counts.
 
     Returns a dict: {"path": rel, "children": [ {name, path, photos, videos,
-    subdirs, hasChildren}, ... ]}. Only directories are returned as nodes;
-    file counts of the *current* folder are attached to its own node when it
-    was produced by the parent listing.
+    subdirs, hasChildren, excluded}, ... ]}. Only directories are returned as
+    nodes. Directories banned by ``config.BANNED`` are still listed — hiding
+    them outright would puzzle a user who can see them in a file browser — but
+    flagged ``excluded`` with zeroed counts, since immich-go will skip them.
     """
     base = safe_resolve(rel)
     if not base.is_dir():
@@ -120,17 +139,34 @@ def list_children(rel: str) -> dict:
             except OSError:
                 continue
             child_abs = Path(entry.path)
+            child_rel = to_rel(child_abs)
+            excluded = banned_reason(child_rel, True)
             photos = videos = subdirs = 0
             has_children = False
+            if excluded:
+                # Skipped by immich-go: report it, but never promise its content.
+                children.append({
+                    "name": entry.name,
+                    "path": child_rel,
+                    "photos": 0,
+                    "videos": 0,
+                    "subdirs": 0,
+                    "hasChildren": False,
+                    "excluded": excluded,
+                })
+                continue
             try:
                 with os.scandir(child_abs) as sub:
                     for e in sub:
                         try:
                             if e.is_dir(follow_symlinks=False):
-                                subdirs += 1
-                                has_children = True
+                                if not banned_reason(f"{child_rel}/{e.name}", True):
+                                    subdirs += 1
+                                    has_children = True
                                 continue
                         except OSError:
+                            continue
+                        if banned_reason(f"{child_rel}/{e.name}", False):
                             continue
                         kind = _classify(e.name)
                         if kind == "photo":
@@ -141,28 +177,139 @@ def list_children(rel: str) -> dict:
                 pass
             children.append({
                 "name": entry.name,
-                "path": to_rel(child_abs),
+                "path": child_rel,
                 "photos": photos,
                 "videos": videos,
                 "subdirs": subdirs,
                 "hasChildren": has_children,
+                "excluded": None,
             })
     children.sort(key=lambda c: c["name"].lower())
     return {"path": to_rel(base), "children": children}
+
+
+def _walk_kept(base: Path):
+    """Walk ``base`` yielding (dir_rel, filenames), pruning banned directories.
+
+    Pruning mirrors immich-go: a banned directory is not descended into at all,
+    so its whole subtree disappears from the counts exactly as it does from the
+    import.
+    """
+    for root_dir, dirs, files in os.walk(base, followlinks=False):
+        root_rel = to_rel(Path(root_dir))
+        kept_dirs = []
+        for d in dirs:
+            child_rel = f"{root_rel}/{d}" if root_rel else d
+            if banned_reason(child_rel, True):
+                continue
+            kept_dirs.append(d)
+        dirs[:] = kept_dirs  # in-place: this is what prunes the walk
+        yield root_rel, files
 
 
 def recursive_count(rel: str) -> dict:
     """Walk ``rel`` fully and return total photo/video counts."""
     base = safe_resolve(rel)
     photos = videos = 0
-    for _root, _dirs, files in os.walk(base, followlinks=False):
+    for root_rel, files in _walk_kept(base):
         for name in files:
+            file_rel = f"{root_rel}/{name}" if root_rel else name
+            if banned_reason(file_rel, False):
+                continue
             kind = _classify(name)
             if kind == "photo":
                 photos += 1
             elif kind == "video":
                 videos += 1
     return {"path": to_rel(base), "photos": photos, "videos": videos}
+
+
+def scan_report(rel: str, top: int = 30) -> dict:
+    """Explain, in numbers, why a folder yields the asset count that it does.
+
+    This is the answer to "the disk holds 250 000 files but the import only
+    found 12 000": it breaks every file down into counted / ignored (with the
+    exact extensions responsible) / excluded by a ban pattern, so the gap stops
+    being a mystery and becomes a list.
+    """
+    base = safe_resolve(rel)
+    started = time.monotonic()
+
+    photos = videos = sidecars = ignored = 0
+    files_total = dirs_total = 0
+    ignored_exts: Counter[str] = Counter()
+    sidecar_exts: Counter[str] = Counter()
+    banned_files: Counter[str] = Counter()
+    banned_dirs: Counter[str] = Counter()
+    unreadable = 0
+
+    for root_dir, dirs, files in os.walk(base, followlinks=False, onerror=None):
+        root_rel = to_rel(Path(root_dir))
+        kept_dirs = []
+        for d in dirs:
+            child_rel = f"{root_rel}/{d}" if root_rel else d
+            reason = banned_reason(child_rel, True)
+            if reason:
+                banned_dirs[reason] += 1
+                continue
+            kept_dirs.append(d)
+        dirs[:] = kept_dirs
+        dirs_total += len(kept_dirs)
+
+        for name in files:
+            files_total += 1
+            file_rel = f"{root_rel}/{name}" if root_rel else name
+            reason = banned_reason(file_rel, False)
+            if reason:
+                banned_files[reason] += 1
+                continue
+            ext = os.path.splitext(name)[1].lower() or "(sans extension)"
+            kind = _classify(name)
+            if kind == "photo":
+                photos += 1
+            elif kind == "video":
+                videos += 1
+            elif ext in config.SIDECAR_EXTS:
+                sidecars += 1
+                sidecar_exts[ext] += 1
+            else:
+                ignored += 1
+                ignored_exts[ext] += 1
+
+    elapsed = round(time.monotonic() - started, 2)
+    assets = photos + videos
+    report = {
+        "path": to_rel(base),
+        "filesTotal": files_total,
+        "dirsTotal": dirs_total,
+        "photos": photos,
+        "videos": videos,
+        "assets": assets,
+        "sidecars": sidecars,
+        "ignored": ignored,
+        "unreadable": unreadable,
+        "ignoredByExt": [
+            {"ext": e, "count": n} for e, n in ignored_exts.most_common(top)
+        ],
+        "sidecarsByExt": [
+            {"ext": e, "count": n} for e, n in sidecar_exts.most_common(top)
+        ],
+        "excludedFiles": [
+            {"pattern": p, "count": n} for p, n in banned_files.most_common()
+        ],
+        "excludedDirs": [
+            {"pattern": p, "count": n} for p, n in banned_dirs.most_common()
+        ],
+        "elapsedSeconds": elapsed,
+    }
+    log.info(
+        "scan '%s': %d assets (%d photos, %d videos) on %d files — "
+        "%d ignored, %d sidecars, %d banned files, %d banned dirs in %ss",
+        report["path"] or "<root>", assets, photos, videos, files_total,
+        ignored, sidecars, sum(banned_files.values()), sum(banned_dirs.values()),
+        elapsed,
+    )
+    return report
 
 
 def dedup_selection(paths: list[str]) -> list[str]:

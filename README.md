@@ -212,9 +212,79 @@ Variables d'environnement, **toutes facultatives** :
 | `STATE_DIR`             | `/state`          | Volume **inscriptible** : configuration + progression. |
 | `IMMICH_GO_EXTRA_ARGS`  | —                 | Arguments bruts ajoutés à chaque appel `immich-go`. |
 | `DISK_MONITOR_INTERVAL` | `2`               | Fréquence (s) de vérification de présence du disque. |
+| `IMPORT_EXCLUDE`        | voir ci-dessous   | Motifs d'exclusion **supplémentaires**, séparés par des virgules. |
+| `LOG_LEVEL`             | `INFO`            | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` — verbosité de `docker logs`. |
+| `LOG_KEEP`              | `20000`           | Lignes de log conservées en mémoire pour l'affichage web. |
 | `PORT`                  | `8080`            | Port HTTP interne au conteneur. |
 
 Le port publié (`8090`) se change dans `docker-compose.yml`.
+
+---
+
+## Ce qui est compté, ce qui est ignoré
+
+L'arborescence ne promet que ce qu'`immich-go` importera réellement. Les deux
+appliquent donc **la même** liste d'extensions (calquée sur
+`DefaultSupportedMedia` d'immich-go v0.32.0) et **les mêmes** motifs d'exclusion.
+
+Trois catégories de fichiers sont écartées :
+
+1. **Les motifs bannis d'immich-go**, qu'il applique de toute façon :
+   `@eaDir/`, `@__thumb/`, `SYNOFILE_THUMB_*.*`, `Lightroom Catalog/`,
+   `thumbnails/`, `.DS_Store`, `/._*`, `.Spotlight-V100/`, `.photostructure/`,
+   `Recently Deleted/`. Un **dossier** banni n'est pas parcouru du tout : tout
+   son contenu disparaît, y compris les photos qu'il contiendrait.
+2. **Les exclusions ajoutées par cette application** (`IMPORT_EXCLUDE`), par
+   défaut la corbeille Windows `$RECYCLE.BIN/`, `System Volume Information/`,
+   `#recycle/`, `@Recycle/`, `.Trash-*/`, `.Trashes/` et `lost+found/`. Elles
+   sont transmises à `immich-go` via `--ban-file`, pour que les deux côtés
+   filtrent exactement le même ensemble.
+3. **Les extensions non gérées** par immich-go (`.mpeg`, `.ts`, `.mxf`, `.nrw`…)
+   ainsi que les fichiers annexes (`.xmp`, `.json`).
+
+Sémantique des motifs (identique à celle d'immich-go) : insensible à la casse,
+recherche en **sous-chaîne** (donc `thumbnails/` correspond à n'importe quelle
+profondeur), `*` ne traverse pas un `/`, et un motif terminé par `/` ne vise que
+les dossiers.
+
+> ⚠️ `--ban-file` **ajoute** des motifs, il n'en retire aucun. Les exclusions
+> intégrées à immich-go (`thumbnails/` notamment, qui peut contenir de vraies
+> photos sur certains Android) ne peuvent donc pas être désactivées sans
+> recompiler le binaire. L'arborescence les applique elle aussi, plutôt que
+> d'annoncer des fichiers qui ne partiraient jamais.
+
+### Diagnostic d'un écart
+
+Si le total annoncé et le total importé divergent, `GET /api/scan?path=<dossier>`
+détaille le parcours complet d'un dossier : fichiers vus, comptés, ignorés (avec
+les extensions responsables, triées par fréquence) et exclus (avec le motif
+responsable). Exemple :
+
+```bash
+curl 'http://localhost:8090/api/scan?path=DISQUE/Photos'
+```
+
+Côté import, le récapitulatif de fin de job affiche la ligne
+« Écartés avant analyse », alimentée par les compteurs `discovered banned /
+unknown / unsupported file` d'immich-go : c'est l'écart entre ce que
+l'arborescence annonçait et ce qu'immich-go a réellement examiné.
+
+---
+
+## Journalisation
+
+Tout part sur **stdout** (donc dans `docker logs`), accès HTTP et messages
+applicatifs sous un format unique :
+
+```
+IP | MÉTHODE | CHEMIN | STATUT | HORODATAGE | NIVEAU | MESSAGE
+```
+
+Les champs sans objet pour une ligne donnée valent `-`. La clé API Immich n'est
+jamais écrite en clair : la ligne de commande `immich-go` est journalisée avec
+`--api-key ***`. Les requêtes de sondage (`/api/status`, `/api/jobs/…`) et les
+fichiers statiques restent en `DEBUG` pour ne pas noyer le journal ; passez
+`LOG_LEVEL=DEBUG` pour voir la sortie brute d'`immich-go`.
 
 ---
 

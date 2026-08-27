@@ -3,19 +3,69 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, fs, i18n, immich_check, settings
+from . import config, fs, i18n, immich_check, logging_setup, settings
 from .importer import manager
+
+logging_setup.configure(config.LOG_LEVEL)
+log = logging_setup.get_logger("http")
 
 app = FastAPI(title="Immich Import", docs_url=None, redoc_url=None)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP: honour a reverse proxy's X-Forwarded-For."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else "-"
+
+
+@app.middleware("http")
+async def access_log(request: Request, call_next):
+    """One access line per request, in the same format as application logs.
+
+    The IP/method/path are also pushed into the logging context, so anything the
+    handler logs (a scan, a job start) is attributed to the request that caused
+    it instead of floating context-free in the output.
+    """
+    ip = _client_ip(request)
+    path = request.url.path
+    if request.url.query:
+        path = f"{path}?{request.url.query}"
+    started = time.monotonic()
+    with logging_setup.request_context(ip, request.method, path):
+        try:
+            response = await call_next(request)
+        except Exception:
+            log.exception("unhandled error", extra={"status": 500})
+            raise
+        ms = (time.monotonic() - started) * 1000
+        status = response.status_code
+        # Static assets and the UI's polling endpoints would drown the log at
+        # INFO, so they sit at DEBUG; anything that failed is always visible.
+        noisy = path.startswith(("/static/", "/api/status", "/api/jobs"))
+        if status >= 500:
+            level = logging.ERROR
+        elif status >= 400:
+            level = logging.WARNING
+        else:
+            level = logging.DEBUG if noisy else logging.INFO
+        log.log(level, "%.1f ms", ms, extra={"status": status})
+    return response
 
 
 def get_lang(
@@ -143,6 +193,25 @@ def get_tree(path: str = Query(""), lang: str = Depends(get_lang)) -> dict:
         raise HTTPException(status_code=404, detail=i18n.tr("err.folderNotFound", lang))
 
 
+@app.get("/api/scan")
+def get_scan(path: str = Query(""), top: int = Query(30, ge=1, le=200),
+             lang: str = Depends(get_lang)) -> dict:
+    """Diagnostic breakdown of one folder: counted vs ignored vs excluded.
+
+    This is the endpoint that answers "the tree announces 250 000 files but the
+    import only found 12 000": it reports every file seen, which ban pattern
+    excluded what, and the extensions that were encountered but classified as
+    neither photo nor video. It walks the whole subtree, so it is deliberately
+    NOT called by the tree view - only on demand.
+    """
+    try:
+        return fs.scan_report(path, top=top)
+    except fs.UnsafePathError:
+        raise HTTPException(status_code=400, detail=i18n.tr("err.invalidPath", lang))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=i18n.tr("err.folderNotFound", lang))
+
+
 @app.get("/api/count")
 def get_count(path: str = Query(""), lang: str = Depends(get_lang)) -> dict:
     try:
@@ -155,6 +224,7 @@ def get_count(path: str = Query(""), lang: str = Depends(get_lang)) -> dict:
 
 @app.post("/api/import")
 def start_import(req: ImportRequest, lang: str = Depends(get_lang)) -> dict:
+    log.info("import requested: %d path(s), dryRun=%s", len(req.paths), req.dryRun)
     try:
         job = manager.start(req.paths, dry_run=req.dryRun)
     except RuntimeError as exc:  # already running

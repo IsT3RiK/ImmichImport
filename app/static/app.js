@@ -46,7 +46,13 @@ const $setupBtn = document.getElementById("setup-btn");
 // dynamic surface when the language changes at runtime (no page reload).
 const t = (key, params) => I18N.t(key, params);
 let lastCfg = null;        // last /api/config, to re-render the meta bar
-let lastFolders = null;    // last job folders, to re-render the running panel
+let lastFolders = null;    // last job folders (server truth), running or done
+let lastJobStatus = null;  // status of the job lastFolders belongs to
+// True once the user has ticked a box in THIS tab. Until then the selection
+// panel belongs to the server's job: the checkboxes are empty after a reload or
+// a VPN reconnect, and rebuilding the panel from them is what used to erase the
+// imported folder's path from the screen.
+let selectionTouched = false;
 let lastStatus = null;     // { key, params, cls } | { raw, cls } for the status line
 
 // ---- disk hot-plug detection ----------------------------------------------
@@ -291,7 +297,10 @@ function makeNode(child, parentPath) {
   }
   applyBox(node);
 
-  box.addEventListener("change", () => onToggle(node, box.checked));
+  box.addEventListener("change", () => {
+    selectionTouched = true;  // an actual click: the panel is this tab's again
+    onToggle(node, box.checked);
+  });
   twisty.addEventListener("click", () => {
     if (child.hasChildren) toggleExpand(node);
   });
@@ -415,9 +424,17 @@ function collectSelection() {
 }
 
 function refreshSelection() {
-  // While a job is running the panel shows the job's folders (renderJobFolders);
-  // don't overwrite it with this tab's checkbox selection.
-  if (running) return;
+  // The server's job wins over this tab's checkboxes — while it runs AND after
+  // it ends. A reconnecting or reloaded window has no box ticked, so falling
+  // back to the DOM here would replace "DISK1/Photos" with "no folder
+  // selected" the instant the job finished. Only an explicit click by the user
+  // (selectionTouched) hands the panel back to the checkbox selection.
+  if (lastFolders && (running || !selectionTouched)) {
+    renderJobFolders(lastFolders, lastJobStatus);
+    $import.disabled = running || collectSelection().length === 0;
+    return;
+  }
+  if (running) return;  // running, but the folder list hasn't arrived yet
   const sel = collectSelection();
   if (!sel.length) {
     $selection.textContent = t("selection.none");
@@ -685,6 +702,17 @@ function renderRecap() {
     (p.unsupported ? recapRow(t("recap.unsupported"), p.unsupported) : "") +
     recapRow(t("recap.errors"), p.errors || 0) +
     recapRow(t("recap.found"), p.found || 0) +
+    // Files immich-go saw on disk and dropped BEFORE any upload: banned by a
+    // pattern, unknown type, or unsupported format. Without this row the gap
+    // between what the tree announced and "total found" is invisible.
+    (p.discSkipped
+      ? recapRow(t("recap.discSkipped"),
+                 I18N.n(p.discSkipped) + t("recap.discDetail", {
+                   banned: p.discBanned || 0,
+                   unknown: p.discUnknown || 0,
+                   unsupported: p.discUnsupported || 0,
+                 }))
+      : "") +
     recapRow(t("recap.time"), fmtDuration(S.recapSecs)) +
     `</div>` +
     (S.recapDry ? `<div class="recap-note">${t("recap.simNote")}</div>` : "");
@@ -696,6 +724,9 @@ $import.addEventListener("click", async () => {
   const paths = collectSelection();
   if (!paths.length) return;
   const dryRun = $dryRun.checked;
+  lastFolders = null;       // drop the previous job's panel
+  lastJobStatus = null;
+  selectionTouched = false; // the new job owns the panel from now on
   setRunning(true);
   startStats(dryRun);
   setStatusKey(dryRun ? "status.startingSim" : "status.starting", "run");
@@ -750,20 +781,33 @@ function fetchJson(url) {
   return fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 }
 
-// Render the folders of the RUNNING job into the selection panel, with a live
-// per-folder status glyph, so a reattached window shows WHAT is being imported
-// instead of "nothing selected".
-function renderJobFolders(folders) {
+// Render the folders of the server's job into the selection panel, with a
+// per-folder status glyph, so a reattached window shows WHAT was (or is being)
+// imported instead of "nothing selected". Kept on screen after the job ends —
+// success or error — until the user picks a new selection.
+function renderJobFolders(folders, status) {
   if (!folders || !folders.length) return;
   lastFolders = folders; // retained so relocalize() can re-render on lang change
+  if (status !== undefined) lastJobStatus = status;
   const glyph = (s) => ({
     done: "✅", running: "⏳", failed: "❌", interrupted: "⏸", pending: "•",
   })[s] || "•";
   const items = folders.map((f) =>
     `<li>${glyph(f.status)} ${f.path === "" ? t("common.root") : escapeHtml(f.path)}</li>`
   ).join("");
+  const key = (lastJobStatus === "running" || lastJobStatus == null)
+    ? "selection.importing" : "selection.imported";
   $selection.innerHTML =
-    t("selection.importing", { count: folders.length }) + `<ul>${items}</ul>`;
+    t(key, { count: folders.length }) + `<ul>${items}</ul>`;
+}
+
+// Re-read the job's folders from the server (the only place that still knows
+// them after a reload) and re-render the panel with their final statuses.
+async function refreshJobFolders() {
+  const active = await fetchJson("/api/jobs/active");
+  if (active && active.jobId && active.folders && active.folders.length) {
+    renderJobFolders(active.folders, active.status);
+  }
 }
 
 // Expand the tree down to each job folder and tick its checkbox, so the
@@ -814,7 +858,8 @@ function attachStream(jobId, snap) {
   // (the job on the server), not this tab's checkboxes — so a reattached window
   // shows the folder(s) in progress instead of an empty "nothing selected".
   if (snap) {
-    renderJobFolders(snap.folders);
+    selectionTouched = false;  // the panel now mirrors the server's job
+    renderJobFolders(snap.folders, snap.status);
     revealJobFolders(snap.paths);
     if (snap.progress) applyProgress(snap.progress);
     // Anchor the ETA to the exact asset count from the tree. Only count folders
@@ -864,7 +909,12 @@ function finalizeJob(d) {
   // Refresh resume state: interrupted -> prompt appears when disk returns;
   // clean finish -> any stale prompt is cleared.
   checkResume();
-  refreshSelection(); // running is now false -> restore the normal panel
+  // running is now false: the panel falls back to the job's folders (not to the
+  // empty checkbox set), then their final ✅/❌ glyphs are pulled from the
+  // server. Failing that fetch changes nothing on screen — the paths stay.
+  if (d && d.status) lastJobStatus = d.status;
+  refreshSelection();
+  refreshJobFolders();
 }
 
 // Entry point used right after POST /api/import (or /resume) succeeds.
@@ -918,6 +968,8 @@ async function resync() {
       if (snap) {
         closeEs();
         currentJobId = active.jobId;
+        selectionTouched = false;
+        renderJobFolders(snap.folders, snap.status);
         startStats(!!snap.dryRun);
         for (const line of (snap.lines || [])) pushLog(line);
         finalizeJob({
@@ -944,7 +996,7 @@ async function streamWatchdog() {
   // without pulling the whole log back (since=huge => no log lines returned).
   const snap = await fetchJson(`/api/jobs/${currentJobId}?since=1000000000`);
   if (snap && running) {
-    renderJobFolders(snap.folders);
+    renderJobFolders(snap.folders, snap.status);
     if (snap.progress) applyProgress(snap.progress);
   }
 }
@@ -1071,9 +1123,9 @@ function relocalize() {
   for (const node of nodes.values()) {
     if (node.recEl) node.recEl.title = t("badge.totalTitle");
   }
-  // Selection panel: running job folders vs this tab's checkbox selection.
-  if (running) { if (lastFolders) renderJobFolders(lastFolders); }
-  else refreshSelection();
+  // Selection panel: job folders vs this tab's checkbox selection — the choice
+  // lives in refreshSelection(), which handles both cases.
+  refreshSelection();
   // Live progress card / final recap card.
   if (S.active) applyProgress(S.lastProgress);
   else if (!$recap.hidden && S.recapData) renderRecap();

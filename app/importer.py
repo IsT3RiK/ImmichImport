@@ -17,6 +17,7 @@ authoritative numbers from ``/api/jobs/active`` without replaying the whole log.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -26,17 +27,21 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from . import config, fs, settings, state
+from . import config, fs, logging_setup, settings, state
+
+log = logging_setup.get_logger("job")
 
 JobStatus = Literal["running", "success", "error", "cancelled", "interrupted"]
 FolderStatus = Literal["pending", "running", "done", "failed", "interrupted"]
 
 # Number of trailing log lines persisted so a resume prompt can show context.
 _LOG_TAIL = 40
-# Cap the in-memory live log so a long import (thousands of progress lines) does
-# not balloon memory or force a huge replay on every window reconnect. The full
-# log still lives in immich-go's own log file if ever needed for debugging.
-_LOG_KEEP = 300
+# Cap the in-memory live log. It only bounds what a reconnecting window can
+# scroll back through - every line is ALSO written to stdout (docker logs), so
+# raising it costs memory, never history. 300 was far too low to diagnose a
+# job: immich-go emits a progress line twice a second, so the end-of-folder
+# report scrolled out of reach within minutes.
+_LOG_KEEP = int(os.environ.get("LOG_KEEP") or 20000)
 
 # immich-go (--no-ui) prints a progress line ~every 500ms, plus a per-folder
 # final report with "  <label> : <n>" lines. We parse both server-side so every
@@ -46,7 +51,15 @@ _RE_LIVE = re.compile(
 )
 _RE_REPORT = re.compile(r"^\s*(.+?)\s*:\s*(\d+)\b")
 _RE_IMPORTING = re.compile(r"=== Importing '(.*)' ===")
+# Order matters: the first needle contained in the label wins. immich-go's
+# "discovered ..." counters describe what the SCAN saw and silently dropped;
+# the "uploaded/discarded ..." ones describe what the UPLOAD did with the
+# assets that survived. Both are needed to explain an "announced vs processed"
+# gap, so the exclusions stop being invisible.
 _REPORT_LABELS = [
+    ("discovered banned file", "disc_banned"),
+    ("discovered unknown file", "disc_unknown"),
+    ("discovered unsupported file", "disc_unsupported"),
     ("uploaded successfully", "uploaded"),
     ("server asset upgraded", "upgraded"),
     ("server has duplicate", "server_dup"),
@@ -70,7 +83,8 @@ class Progress:
 
     def __init__(self) -> None:
         self.cum = dict(uploaded=0, upgraded=0, server_dup=0, local_dup=0,
-                        unsupported=0, errors=0, found=0)
+                        unsupported=0, errors=0, found=0,
+                        disc_banned=0, disc_unknown=0, disc_unsupported=0)
         self.cur = dict(found=0, uploaded=0, errors=0, read_pct=0)
         self.rep: dict[str, int] = {}
         self.folder_open = False
@@ -112,6 +126,8 @@ class Progress:
         self.cum["server_dup"] += sdup
         self.cum["local_dup"] += ldup
         self.cum["found"] += self.cur["found"]
+        for key in ("disc_banned", "disc_unknown", "disc_unsupported"):
+            self.cum[key] += self.rep.get(key, 0)
         self.cur = dict(found=0, uploaded=0, errors=0, read_pct=0)
         self.rep = {}
         self.folder_open = False
@@ -190,6 +206,8 @@ class Progress:
             eff["server_dup"] += sdup
             eff["local_dup"] += ldup
             eff["found"] += found_cur
+            for key in ("disc_banned", "disc_unknown", "disc_unsupported"):
+                eff[key] += self.rep.get(key, 0)
         found = eff["found"]
         uploaded = eff["uploaded"]
         errors = eff["errors"]
@@ -206,6 +224,14 @@ class Progress:
             "unsupported": unsupported, "processed": processed,
             "remaining": remaining, "readPct": self.cur["read_pct"], "pct": pct,
             "dupsEstimated": dups_estimated,
+            # Scan-side exclusions: files immich-go saw on disk and dropped
+            # before any upload was attempted. They are exactly the difference
+            # between what the tree announces and what "found" ever reaches.
+            "discBanned": eff["disc_banned"],
+            "discUnknown": eff["disc_unknown"],
+            "discUnsupported": eff["disc_unsupported"],
+            "discSkipped": (eff["disc_banned"] + eff["disc_unknown"]
+                            + eff["disc_unsupported"]),
             "currentFolder": self.current_folder,
         }
 
@@ -242,8 +268,24 @@ class Job:
     def paths(self) -> list[str]:
         return [f.path for f in self.folders]
 
+    # Prefixes emitted by this module, as opposed to raw immich-go output -
+    # which is far too chatty (two progress lines a second) to sit at INFO.
+    _LEVELS = (("[error]", logging.ERROR), ("[warn]", logging.WARNING),
+               ("[info]", logging.INFO), ("[ok]", logging.INFO),
+               ("[cmd]", logging.INFO))
+
     def log(self, line: str) -> None:
         clean = line.rstrip("\n")
+        stripped = clean.strip()
+        # Mirror to stdout so `docker logs` tells the whole story; the in-memory
+        # buffer only feeds the UI.
+        if stripped:
+            level = logging.DEBUG
+            for prefix, lvl in self._LEVELS:
+                if stripped.startswith(prefix):
+                    level = lvl
+                    break
+            log.log(level, "job=%s %s", self.id, stripped)
         with self._lock:
             self.logs.append(clean)
             self.log_total += 1
@@ -354,6 +396,8 @@ class JobManager:
                       dry_run=dry_run)
             self._jobs[job.id] = job
             self._active = job.id
+        log.info("job=%s start dryRun=%s folders=%s", job.id, dry_run,
+                 ", ".join(p or "<root>" for p in job.paths))
         job.persist()
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return job
@@ -379,6 +423,8 @@ class JobManager:
                       dry_run=bool(persisted.get("dryRun", False)))
             self._jobs[job.id] = job
             self._active = job.id
+        log.info("job=%s resume folders=%s", job.id,
+                 ", ".join(p or "<root>" for p in job.paths))
         job.persist()
         threading.Thread(target=self._run, args=(job, True), daemon=True).start()
         return job
@@ -438,6 +484,15 @@ class JobManager:
             "--api-key", settings.immich_api_key(),
             "--recursive",
         ]
+        # Forward OUR extra exclusions to immich-go so both sides filter the
+        # same set, from the same source of truth (config.EXTRA_BANNED_PATTERNS
+        # is also what fs.py counts with). --ban-file APPENDS to immich-go's
+        # built-in defaults; it cannot remove them, so a default such as
+        # "thumbnails/" stays banned inside immich-go whatever we pass - which
+        # is why config.BANNED replays those defaults instead of pretending the
+        # app could lift them.
+        for pattern in config.EXTRA_BANNED_PATTERNS:
+            cmd.append(f"--ban-file={pattern}")
         if album and album != "NONE":
             cmd.append(f"--folder-as-album={album}")
         if job.dry_run and "--dry-run" not in config.IMMICH_GO_EXTRA_ARGS:
@@ -571,6 +626,14 @@ class JobManager:
             job._done.set()
             job._current_abs = None
             job.finalize_progress()  # fold the last folder's report into totals
+            prog = job.progress.as_dict()
+            log.info(
+                "job=%s end status=%s found=%d uploaded=%d dups=%d errors=%d "
+                "banned=%d unknown=%d unsupported=%d",
+                job.id, job.status, prog["found"], prog["uploaded"],
+                prog["dups"], prog["errors"], prog["discBanned"],
+                prog["discUnknown"], prog["discUnsupported"],
+            )
             job.persist()
             # Clean terminal states clear the resume state; interrupted keeps it.
             if job.status in ("success", "cancelled"):

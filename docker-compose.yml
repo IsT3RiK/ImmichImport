@@ -25,6 +25,11 @@ services:
       IMMICH_URL: ${IMMICH_URL:-}
       IMMICH_API_KEY: ${IMMICH_API_KEY:-}
       ALBUM_MODE: ${ALBUM_MODE:-}
+      # Extra exclusion patterns (comma-separated), applied to the tree counts
+      # AND forwarded to immich-go via --ban-file. Empty = built-in defaults.
+      IMPORT_EXCLUDE: ${IMPORT_EXCLUDE:-}
+      # Log verbosity on stdout / `docker logs`: DEBUG | INFO | WARNING | ERROR.
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # IMMICH_GO_EXTRA_ARGS: "--include-type=IMAGE"   # optional
     volumes:
       # PARENT directory where the NAS mounts USB disks (e.g. /mnt/@usb), NOT a
