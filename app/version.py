@@ -7,4 +7,4 @@ screen, not from the shell.
 
 Bump this when shipping a change worth telling apart.
 """
-__version__ = "1.0"
+__version__ = "1.1"

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Immich Import</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=__APP_VERSION__" />
 </head>
 <body>
   <div class="app">
@@ -92,6 +92,8 @@
           </div>
         </div>
         <div id="tree" class="tree" role="tree" aria-label="Dossiers"></div>
+        <!-- « N disques vides masqués — afficher » : peuplé par app.js. -->
+        <div id="tree-empty-note" class="tree-empty-note" hidden></div>
       </section>
 
       <!-- Control / status panel -->
@@ -156,8 +158,8 @@
     </footer>
   </div>
 
-  <script src="/static/i18n.js"></script>
-  <script src="/static/wizard.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/i18n.js?v=__APP_VERSION__"></script>
+  <script src="/static/wizard.js?v=__APP_VERSION__"></script>
+  <script src="/static/app.js?v=__APP_VERSION__"></script>
 </body>
 </html>

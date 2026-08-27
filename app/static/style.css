@@ -391,6 +391,20 @@ main {
 /* ---- tree ---------------------------------------------------------------- */
 .tree { overflow: auto; padding: 6px 12px 12px; flex: 1; }
 
+/* « N disques vides masqués — afficher » sous l'arbre. */
+.tree-empty-note {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 18px 12px;
+  font-size: 11.5px; color: var(--muted-2);
+  border-top: 1px solid var(--border);
+}
+.link-btn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; color: var(--muted); font-weight: 600;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.link-btn:hover { color: var(--accent-bright); }
+
 .node-row {
   display: flex; align-items: center; gap: 9px;
   padding: 6px 10px; border-radius: var(--radius-sm);

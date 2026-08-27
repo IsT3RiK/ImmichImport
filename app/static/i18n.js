@@ -76,6 +76,14 @@
       "tree.diskState": "État du disque",
       "tree.reload": "Recharger l'arborescence",
       "tree.reloadAria": "Recharger",
+      // Disques sans aucune photo ni vidéo : masqués par défaut, avec
+      // un lien pour les réafficher (un disque illisible compte 0 lui aussi).
+      "tree.emptyHidden": {
+        one: "<b>{count}</b> disque vide masqué",
+        other: "<b>{count}</b> disques vides masqués",
+      },
+      "tree.showEmpty": "afficher",
+      "tree.hideEmpty": "masquer",
 
       "badge.totalTitle":
         "Ce dossier et tous ses sous-dossiers : photos et vidéos qui seront importées",
@@ -304,6 +312,14 @@
       "tree.diskState": "Disk status",
       "tree.reload": "Reload the tree",
       "tree.reloadAria": "Reload",
+      // Disques sans aucune photo ni vidéo : masqués par défaut, avec
+      // un lien pour les réafficher (un disque illisible compte 0 lui aussi).
+      "tree.emptyHidden": {
+        one: "<b>{count}</b> empty disk hidden",
+        other: "<b>{count}</b> empty disks hidden",
+      },
+      "tree.showEmpty": "show",
+      "tree.hideEmpty": "hide",
 
       "badge.totalTitle":
         "This folder and all its subfolders: photos and videos that will be imported",
@@ -532,6 +548,14 @@
       "tree.diskState": "Estado del disco",
       "tree.reload": "Recargar el árbol",
       "tree.reloadAria": "Recargar",
+      // Disques sans aucune photo ni vidéo : masqués par défaut, avec
+      // un lien pour les réafficher (un disque illisible compte 0 lui aussi).
+      "tree.emptyHidden": {
+        one: "<b>{count}</b> disco vacío oculto",
+        other: "<b>{count}</b> discos vacíos ocultos",
+      },
+      "tree.showEmpty": "mostrar",
+      "tree.hideEmpty": "ocultar",
 
       "badge.totalTitle":
         "Esta carpeta y todas sus subcarpetas: fotos y vídeos que se importarán",
@@ -760,6 +784,14 @@
       "tree.diskState": "Datenträger-Status",
       "tree.reload": "Baum neu laden",
       "tree.reloadAria": "Neu laden",
+      // Disques sans aucune photo ni vidéo : masqués par défaut, avec
+      // un lien pour les réafficher (un disque illisible compte 0 lui aussi).
+      "tree.emptyHidden": {
+        one: "<b>{count}</b> leerer Datenträger ausgeblendet",
+        other: "<b>{count}</b> leere Datenträger ausgeblendet",
+      },
+      "tree.showEmpty": "anzeigen",
+      "tree.hideEmpty": "ausblenden",
 
       "badge.totalTitle":
         "Dieser Ordner und alle Unterordner: Fotos und Videos, die importiert werden",
@@ -988,6 +1020,14 @@
       "tree.diskState": "Stato del disco",
       "tree.reload": "Ricarica l'albero",
       "tree.reloadAria": "Ricarica",
+      // Disques sans aucune photo ni vidéo : masqués par défaut, avec
+      // un lien pour les réafficher (un disque illisible compte 0 lui aussi).
+      "tree.emptyHidden": {
+        one: "<b>{count}</b> disco vuoto nascosto",
+        other: "<b>{count}</b> dischi vuoti nascosti",
+      },
+      "tree.showEmpty": "mostra",
+      "tree.hideEmpty": "nascondi",
 
       "badge.totalTitle":
         "Questa cartella e tutte le sottocartelle: foto e video che verranno importati",

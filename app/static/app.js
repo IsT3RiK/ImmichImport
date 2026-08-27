@@ -6,6 +6,18 @@
 const nodes = new Map();
 let running = false;
 
+// ---- tree auto-behaviour ---------------------------------------------------
+// A NAS exposes every partition it can see: on this disk bay, seven of the eight
+// entries hold no importable file at all. They are hidden once their recursive
+// count comes back at zero, and the useful one unfolds by itself — so plugging a
+// disk in lands you straight on your photos instead of on a list of sdX.
+const AUTO_EXPAND_DEPTH = 3;        // niveaux dépliés automatiquement
+const AUTO_EXPAND_MAX_FOLDERS = 40; // garde-fou: dossiers ouverts au maximum
+let treeGeneration = 0;   // incrémenté à chaque reconstruction: annule le travail en cours
+let autoExpandBudget = 0;
+let emptyRoots = new Set();  // disques comptés à 0 photo / 0 vidéo
+let showEmptyRoots = false;  // l'utilisateur a demandé à les revoir
+
 // Live-stream health tracking (see "resilient live streaming" below).
 let currentEs = null;      // active EventSource, or null
 let currentJobId = null;   // job id we believe we're streaming
@@ -14,6 +26,7 @@ let resyncing = false;     // guard against overlapping resync() calls
 const STREAM_STALE_MS = 10000; // no SSE traffic this long => treat as dropped
 
 const $tree = document.getElementById("tree");
+const $emptyNote = document.getElementById("tree-empty-note");
 const $selection = document.getElementById("selection");
 const $import = document.getElementById("import");
 const $cancel = document.getElementById("cancel");
@@ -128,9 +141,15 @@ function setDiskUi(present, message) {
 }
 
 function rebuildTree() {
+  treeGeneration++;         // annule un auto-dépliage encore en cours
   nodes.clear();
+  emptyRoots = new Set();
   $tree.innerHTML = "";
-  loadChildren("", $tree).then(refreshSelection);
+  renderEmptyNote();
+  loadChildren("", $tree).then(() => {
+    refreshSelection();
+    autoExpandRoots();
+  });
 }
 
 // ---- resume of an interrupted import --------------------------------------
@@ -226,6 +245,7 @@ function pumpCounts() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d && el.isConnected) el.innerHTML = badgeInner(d.photos, d.videos);
+        if (d) markIfEmptyRoot(path, d);
       })
       .catch(() => {})
       .finally(() => {
@@ -243,6 +263,72 @@ function badgeInner(photos, videos) {
   return `<span class="ic">📷</span>${I18N.n(photos || 0)}` +
     `<span class="dot">·</span>` +
     `<span class="ic">🎬</span>${I18N.n(videos || 0)}`;
+}
+
+// A top-level entry is a disk: parent === "" (the root itself has no node).
+function isRootPath(path) {
+  const node = nodes.get(path);
+  return !!node && node.parent === "";
+}
+
+// Called when a recursive count comes back. The count covers the whole subtree,
+// so zero here means "nothing importable anywhere on this disk".
+function markIfEmptyRoot(path, count) {
+  if (!isRootPath(path)) return;
+  const empty = (count.photos || 0) + (count.videos || 0) === 0;
+  if (empty) emptyRoots.add(path); else emptyRoots.delete(path);
+  applyEmptyRoots();
+}
+
+function applyEmptyRoots() {
+  for (const path of emptyRoots) {
+    const node = nodes.get(path);
+    if (node) node.el.hidden = !showEmptyRoots;
+  }
+  renderEmptyNote();
+}
+
+// One discreet line under the tree. Hiding without saying so would be a trap:
+// a disk that is merely unreadable also counts zero, and it must stay reachable.
+function renderEmptyNote() {
+  const count = emptyRoots.size;
+  if (!count) {
+    if ($emptyNote) $emptyNote.hidden = true;
+    return;
+  }
+  $emptyNote.hidden = false;
+  $emptyNote.innerHTML =
+    `<span>${t("tree.emptyHidden", { count })}</span>` +
+    `<button type="button" class="link-btn">` +
+    `${showEmptyRoots ? t("tree.hideEmpty") : t("tree.showEmpty")}</button>`;
+  $emptyNote.querySelector("button").addEventListener("click", () => {
+    showEmptyRoots = !showEmptyRoots;
+    applyEmptyRoots();
+  });
+}
+
+// Unfold the first levels so the useful folders are on screen without a click.
+// Bounded twice over — by depth and by a folder budget — because an external USB
+// disk is slow and a deep tree could otherwise fire hundreds of requests at it.
+async function autoExpand(node, depth, gen) {
+  if (depth <= 0 || gen !== treeGeneration || autoExpandBudget <= 0) return;
+  if (!node.hasChildren || node.childrenEl.hidden === false) return;
+  autoExpandBudget--;
+  await toggleExpand(node);
+  if (gen !== treeGeneration) return;
+  for (const child of loadedChildren(node)) {
+    await autoExpand(child, depth - 1, gen);
+  }
+}
+
+// Entry point: called once per tree build, on every disk that has sub-folders.
+async function autoExpandRoots() {
+  const gen = treeGeneration;
+  autoExpandBudget = AUTO_EXPAND_MAX_FOLDERS;
+  for (const node of [...nodes.values()]) {
+    if (node.parent !== "" || gen !== treeGeneration) continue;
+    await autoExpand(node, AUTO_EXPAND_DEPTH, gen);
+  }
 }
 
 function makeNode(child, parentPath) {
@@ -1123,6 +1209,7 @@ function renderMeta(cfg) {
 function relocalize() {
   updateLangButton();
   if (lastCfg) renderMeta(lastCfg);
+  renderEmptyNote();
   // Tree badge tooltips (folder names are data and stay; only titles localize).
   for (const node of nodes.values()) {
     if (node.recEl) node.recEl.title = t("badge.totalTitle");
@@ -1182,8 +1269,11 @@ async function boot() {
 }
 
 document.getElementById("reload").addEventListener("click", () => {
+  treeGeneration++;
   nodes.clear();
+  emptyRoots = new Set();
   $tree.innerHTML = "";
+  renderEmptyNote();
   diskPresent = null; // force re-evaluation so the tree rebuilds
   pollDisk().then(refreshSelection);
 });

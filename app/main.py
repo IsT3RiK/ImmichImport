@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -328,8 +328,18 @@ async def stream_job(job_id: str, lang: str = Depends(get_lang)) -> StreamingRes
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index() -> HTMLResponse:
+    """Serve the page with cache-busted asset URLs.
+
+    Without this, a browser holding yesterday's app.js keeps showing the old UI
+    after a redeploy — the container is up to date and the screen is not, which
+    is exactly the kind of confusion the version tag is meant to remove. The
+    page itself is revalidated on every load, and every asset URL carries the
+    version, so a new release can never be masked by a stale cache.
+    """
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace("__APP_VERSION__", version.__version__)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
