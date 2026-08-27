@@ -47,6 +47,15 @@ _LOG_KEEP = int(os.environ.get("LOG_KEEP") or 20000)
 # Per-file errors kept in memory for the UI. The full list always stays on disk
 # in the immich-go JSON log, so this cap only bounds what the recap can list.
 _ERR_KEEP = 500
+# Generic (file-less) problems kept, deduplicated: "failed to create album",
+# "<folder>: file does not exist"...
+_ISSUE_KEEP = 50
+# Attribute keys immich-go uses to carry the error text. It logs "error" from
+# RecordAssetError but plain "err" from Log().Error("Error", "err", …) — reading
+# only the first one left half the list with an empty reason.
+_ERR_KEYS = ("error", "err", "reason", "message")
+# Never rendered: they describe the record itself, not the problem.
+_META_KEYS = {"time", "level", "msg", "file", "source"}
 # immich-go log directories retained under STATE_DIR (one per job).
 _JOB_LOG_DIRS_KEEP = 10
 
@@ -263,6 +272,8 @@ class Job:
     # Per-file failures, extracted from immich-go's JSON log (see _collect_errors).
     errors: list[dict] = field(default_factory=list)
     errors_total: int = 0
+    # File-less problems, deduplicated: {key: {kind, detail, count}}
+    issues: dict = field(default_factory=dict)
     progress: Progress = field(default_factory=Progress)
     return_code: int | None = None
     started_at: float = field(default_factory=time.time)
@@ -368,6 +379,8 @@ class Job:
                 "total": self.errors_total,
                 "kept": len(self.errors),
                 "errors": self.errors[:max(limit, 0)],
+                "issues": sorted(self.issues.values(),
+                                 key=lambda i: i["count"], reverse=True),
             }
 
     def snapshot(self, since: int = 0) -> dict:
@@ -573,8 +586,39 @@ class JobManager:
             return os.path.join(abs_path, tail), tail
         return raw, raw
 
+    @staticmethod
+    def _error_detail(rec: dict) -> str:
+        """Extract the human-readable reason from one log record.
+
+        immich-go is not consistent about the attribute it puts the error in, so
+        the known keys are tried in order and anything else it attached (album
+        name, path...) is appended rather than dropped.
+        """
+        for key in _ERR_KEYS:
+            val = rec.get(key)
+            if isinstance(val, str) and val:
+                return val
+            if val:
+                return str(val)
+        extra = [f"{k}={v}" for k, v in rec.items()
+                 if k not in _META_KEYS and not isinstance(v, (dict, list))]
+        return ", ".join(extra)
+
     def _collect_errors(self, job: Job, log_file, abs_path: str) -> int:
-        """Read back immich-go's JSON log and record every per-file failure.
+        """Read back immich-go's JSON log and record every failure it reports.
+
+        Two shapes come out of that log and they must not be mixed:
+
+        * records carrying a ``file`` — one failed photo or video, listed
+          individually with its size;
+        * records without one ("failed to create album", "<dir>: file does not
+          exist") — a general problem, deduplicated with a count, because a
+          hundred identical lines say nothing more than one.
+
+        ``context canceled`` is dropped outright: when an upload dies, every
+        pending transfer reports it, and immich-go filters that same noise out
+        of its own output. Keeping it would bury the eight real failures under a
+        hundred meaningless lines — which is exactly what it did.
 
         Sizes are stat'ed here, while the disk is still mounted: immich-go logs
         the file and the error but not the size, and the recap is read long
@@ -596,11 +640,30 @@ class JobManager:
                     continue
                 if str(rec.get("level", "")).upper() != "ERROR":
                     continue
+
+                kind = str(rec.get("msg") or "")
+                detail = self._error_detail(rec)
+                if "context canceled" in (kind + " " + detail).lower():
+                    continue
+
                 raw = rec.get("file")
                 if isinstance(raw, dict):  # assets.Asset logs a group
                     raw = raw.get("FileName") or raw.get("OriginalFileName") or ""
                 if not isinstance(raw, str):
                     raw = ""
+
+                if not raw:
+                    # No file: a general problem. Fold identical ones together.
+                    key = f"{kind}\n{detail}"
+                    with job._lock:
+                        entry = job.issues.get(key)
+                        if entry:
+                            entry["count"] += 1
+                        elif len(job.issues) < _ISSUE_KEEP:
+                            job.issues[key] = {"kind": kind, "detail": detail,
+                                               "count": 1}
+                    continue
+
                 full, rel = self._resolve_logged_file(raw, abs_path)
                 size = None
                 try:
@@ -615,8 +678,8 @@ class JobManager:
                             "name": os.path.basename(rel) or rel,
                             "path": rel,
                             "size": size,
-                            "kind": rec.get("msg") or "",
-                            "detail": str(rec.get("error") or ""),
+                            "kind": kind,
+                            "detail": detail,
                             "time": rec.get("time") or "",
                         })
         if found:

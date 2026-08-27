@@ -852,10 +852,16 @@ function renderErrors() {
   const data = S.errorsData;
   if (!data) { box.innerHTML = `<div class="err-empty">${t("recap.errorsLoading")}</div>`; return; }
   const list = data.errors || [];
-  if (!list.length) {
+  if (!list.length && !(data.issues || []).length) {
     box.innerHTML = `<div class="err-empty">${t("recap.errorsNone")}</div>`;
     return;
   }
+  const issues = (data.issues || []).map((i) =>
+    `<div class="err-item err-issue">` +
+    `<div class="err-reason">${escapeHtml(i.kind || "")}` +
+    (i.detail ? ` — ${escapeHtml(i.detail)}` : "") +
+    (i.count > 1 ? ` <span class="err-count">×${I18N.n(i.count)}</span>` : "") +
+    `</div></div>`).join("");
   const rows = list.map((e) => {
     const size = (e.size === null || e.size === undefined) ? "—" : I18N.bytes(e.size);
     const folder = (e.path || "").split("/").slice(0, -1).join("/");
@@ -869,7 +875,9 @@ function renderErrors() {
       `</div>`;
   }).join("");
   const hidden = (data.total || 0) - list.length;
-  box.innerHTML = rows + (hidden > 0
+  // Problèmes généraux d'abord : ils expliquent souvent les échecs par fichier
+  // qui suivent (connexion coupée, album impossible à créer).
+  box.innerHTML = issues + rows + (hidden > 0
     ? `<div class="err-empty">${t("recap.errorsMore", { count: hidden })}</div>` : "");
 }
 
