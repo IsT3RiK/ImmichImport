@@ -389,6 +389,34 @@ main {
 .icon-btn:active { transform: translateY(1px); }
 
 /* ---- tree ---------------------------------------------------------------- */
+/* ---- liste des fichiers en erreur (récapitulatif) ------------------------ */
+.recap-row-open { cursor: pointer; border-radius: 8px; }
+.recap-row-open:hover { background: rgba(255, 255, 255, 0.05); }
+.recap-row-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.recap-open-hint {
+  margin-left: 8px; font-weight: 500; font-size: 11px;
+  color: var(--muted); text-decoration: underline; text-underline-offset: 2px;
+}
+.recap-errors {
+  max-height: 320px; overflow: auto;
+  margin-top: 8px; padding: 4px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.err-item { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.err-item:last-child { border-bottom: none; }
+.err-head { display: flex; align-items: baseline; gap: 10px; }
+.err-name {
+  font-size: 12.5px; font-weight: 600; color: var(--text);
+  overflow-wrap: anywhere;
+}
+.err-size {
+  margin-left: auto; flex: 0 0 auto;
+  font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums;
+}
+.err-folder { font-size: 11px; color: var(--muted-2); overflow-wrap: anywhere; }
+.err-reason { margin-top: 2px; font-size: 11.5px; color: oklch(0.78 0.12 22); overflow-wrap: anywhere; }
+.err-empty { padding: 10px; font-size: 11.5px; color: var(--muted-2); text-align: center; }
+
 .tree { overflow: auto; padding: 6px 12px 12px; flex: 1; }
 
 /* « N disques vides masqués — afficher » sous l'arbre. */

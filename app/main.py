@@ -285,6 +285,20 @@ def cancel_job(job_id: str, lang: str = Depends(get_lang)) -> dict:
     return {"cancelled": True}
 
 
+@app.get("/api/jobs/{job_id}/errors")
+def job_errors(job_id: str, limit: int = Query(200, ge=1, le=2000),
+               lang: str = Depends(get_lang)) -> dict:
+    """List the files that failed, with their size and the reason.
+
+    This is what the "N errors" figure links to: a count nobody can act on
+    becomes a list of names you can retry, fix or ignore.
+    """
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=i18n.tr("err.jobNotFound", lang))
+    return job.errors_view(limit=limit)
+
+
 @app.get("/api/jobs/{job_id}/stream")
 async def stream_job(job_id: str, lang: str = Depends(get_lang)) -> StreamingResponse:
     job = manager.get(job_id)

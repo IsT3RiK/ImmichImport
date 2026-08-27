@@ -765,6 +765,8 @@ function finishStats(d) {
   S.recapData = d;
   S.recapSecs = secs;
   S.recapDry = S.dryRun;
+  S.errorsOpen = false;   // chaque job repart avec son panneau replié
+  S.errorsData = null;
   renderRecap();
 }
 
@@ -787,7 +789,17 @@ function renderRecap() {
     (p.upgraded ? recapRow(t("recap.upgraded"), p.upgraded) : "") +
     recapRow(t("recap.dups"), dupsStr) +
     (p.unsupported ? recapRow(t("recap.unsupported"), p.unsupported) : "") +
-    recapRow(t("recap.errors"), p.errors || 0) +
+    // A bare "9 errors" is unactionable: make the figure open the list of the
+    // files that actually failed (fetched lazily from /api/jobs/<id>/errors).
+    (p.errors
+      ? `<div class="recap-row recap-row-open" id="recap-errors-row" ` +
+        `role="button" tabindex="0">` +
+        `<span>${t("recap.errors")}</span>` +
+        `<b>${I18N.n(p.errors)}` +
+        `<span class="recap-open-hint">` +
+        `${S.errorsOpen ? t("recap.errorsHide") : t("recap.errorsShow")}</span></b>` +
+        `</div>`
+      : recapRow(t("recap.errors"), 0)) +
     recapRow(t("recap.found"), p.found || 0) +
     // Files immich-go saw on disk and dropped BEFORE any upload: banned by a
     // pattern, unknown type, or unsupported format. Without this row the gap
@@ -802,8 +814,63 @@ function renderRecap() {
       : "") +
     recapRow(t("recap.time"), fmtDuration(S.recapSecs)) +
     `</div>` +
+    `<div id="recap-errors" class="recap-errors"${S.errorsOpen ? "" : " hidden"}></div>` +
     (S.recapDry ? `<div class="recap-note">${t("recap.simNote")}</div>` : "");
   $recap.hidden = false;
+  const row = document.getElementById("recap-errors-row");
+  if (row) {
+    const toggle = () => toggleErrors();
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    });
+  }
+  if (S.errorsOpen) renderErrors();
+}
+
+function toggleErrors() {
+  S.errorsOpen = !S.errorsOpen;
+  renderRecap();
+  if (S.errorsOpen && !S.errorsData) loadErrors();
+}
+
+async function loadErrors() {
+  const box = document.getElementById("recap-errors");
+  if (box) box.innerHTML = `<div class="err-empty">${t("recap.errorsLoading")}</div>`;
+  const data = S.jobId
+    ? await fetchJson(`/api/jobs/${S.jobId}/errors?limit=200`)
+    : null;
+  S.errorsData = data || { total: 0, kept: 0, errors: [] };
+  renderErrors();
+}
+
+// One line per failed file: name, folder, size, and immich-go's own reason.
+// The size is what tells a 0-byte truncated file apart from a server refusal.
+function renderErrors() {
+  const box = document.getElementById("recap-errors");
+  if (!box) return;
+  const data = S.errorsData;
+  if (!data) { box.innerHTML = `<div class="err-empty">${t("recap.errorsLoading")}</div>`; return; }
+  const list = data.errors || [];
+  if (!list.length) {
+    box.innerHTML = `<div class="err-empty">${t("recap.errorsNone")}</div>`;
+    return;
+  }
+  const rows = list.map((e) => {
+    const size = (e.size === null || e.size === undefined) ? "—" : I18N.bytes(e.size);
+    const folder = (e.path || "").split("/").slice(0, -1).join("/");
+    return `<div class="err-item">` +
+      `<div class="err-head">` +
+      `<span class="err-name" title="${escapeHtml(e.path || "")}">${escapeHtml(e.name || "?")}</span>` +
+      `<span class="err-size">${size}</span></div>` +
+      (folder ? `<div class="err-folder">${escapeHtml(folder)}</div>` : "") +
+      `<div class="err-reason">${escapeHtml(e.kind || "")}` +
+      (e.detail ? ` — ${escapeHtml(e.detail)}` : "") + `</div>` +
+      `</div>`;
+  }).join("");
+  const hidden = (data.total || 0) - list.length;
+  box.innerHTML = rows + (hidden > 0
+    ? `<div class="err-empty">${t("recap.errorsMore", { count: hidden })}</div>` : "");
 }
 
 // ---- import + live logs ---------------------------------------------------
@@ -944,6 +1011,7 @@ function attachStream(jobId, snap) {
   // Keep the selection panel and tree in sync with what's ACTUALLY importing
   // (the job on the server), not this tab's checkboxes — so a reattached window
   // shows the folder(s) in progress instead of an empty "nothing selected".
+  S.jobId = jobId;             // the recap needs it to fetch the error list
   if (snap) {
     selectionTouched = false;  // the panel now mirrors the server's job
     renderJobFolders(snap.folders, snap.status);
@@ -1055,6 +1123,7 @@ async function resync() {
       if (snap) {
         closeEs();
         currentJobId = active.jobId;
+        S.jobId = active.jobId;
         selectionTouched = false;
         renderJobFolders(snap.folders, snap.status);
         startStats(!!snap.dryRun);

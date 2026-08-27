@@ -17,9 +17,11 @@ authoritative numbers from ``/api/jobs/active`` without replaying the whole log.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -42,6 +44,11 @@ _LOG_TAIL = 40
 # job: immich-go emits a progress line twice a second, so the end-of-folder
 # report scrolled out of reach within minutes.
 _LOG_KEEP = int(os.environ.get("LOG_KEEP") or 20000)
+# Per-file errors kept in memory for the UI. The full list always stays on disk
+# in the immich-go JSON log, so this cap only bounds what the recap can list.
+_ERR_KEEP = 500
+# immich-go log directories retained under STATE_DIR (one per job).
+_JOB_LOG_DIRS_KEEP = 10
 
 # immich-go (--no-ui) prints a progress line ~every 500ms, plus a per-folder
 # final report with "  <label> : <n>" lines. We parse both server-side so every
@@ -253,6 +260,9 @@ class Job:
     dry_run: bool = False
     logs: list[str] = field(default_factory=list)
     log_total: int = 0
+    # Per-file failures, extracted from immich-go's JSON log (see _collect_errors).
+    errors: list[dict] = field(default_factory=list)
+    errors_total: int = 0
     progress: Progress = field(default_factory=Progress)
     return_code: int | None = None
     started_at: float = field(default_factory=time.time)
@@ -262,6 +272,7 @@ class Job:
     _cancel: bool = False
     _interrupted: bool = False
     _current_abs: str | None = field(default=None, repr=False)
+    _run_seq: int = field(default=0, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
 
     @property
@@ -344,6 +355,21 @@ class Job:
                 "progress": self._progress_dict(),
             }
 
+    def errors_view(self, limit: int = 200) -> dict:
+        """The list behind the "N errors" figure: which files failed, and why.
+
+        A bare count is unactionable — you cannot retry, fix or ignore what you
+        cannot name. ``total`` is the real number of failures; ``errors`` is
+        capped so a run that fails on thousands of files still answers fast.
+        """
+        with self._lock:
+            return {
+                "jobId": self.id,
+                "total": self.errors_total,
+                "kept": len(self.errors),
+                "errors": self.errors[:max(limit, 0)],
+            }
+
     def snapshot(self, since: int = 0) -> dict:
         with self._lock:
             base = self.log_total - len(self.logs)  # absolute index of logs[0]
@@ -398,6 +424,7 @@ class JobManager:
             self._active = job.id
         log.info("job=%s start dryRun=%s folders=%s", job.id, dry_run,
                  ", ".join(p or "<root>" for p in job.paths))
+        self._prune_log_dirs()
         job.persist()
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return job
@@ -475,7 +502,8 @@ class JobManager:
         return True
 
     # -- command building ---------------------------------------------------
-    def _build_cmd(self, job: Job, abs_path: str) -> list[str]:
+    def _build_cmd(self, job: Job, abs_path: str,
+                   log_file: str | None = None) -> list[str]:
         album = settings.album_mode()
         cmd = [
             config.IMMICH_GO_BIN, "upload", "from-folder",
@@ -497,9 +525,104 @@ class JobManager:
             cmd.append(f"--folder-as-album={album}")
         if job.dry_run and "--dry-run" not in config.IMMICH_GO_EXTRA_ARGS:
             cmd.append("--dry-run")
+        if log_file:
+            # immich-go writes its per-file events to a LOG FILE, never to
+            # stdout — which is why a failed upload used to be invisible here,
+            # leaving "9 errors" with no way to know which files. JSON so it can
+            # be parsed exactly; ERROR level so a 250 000-file import doesn't
+            # write a gigabyte of INFO lines we would never read.
+            cmd.extend(["--log-file", log_file,
+                        "--log-type", "JSON",
+                        "--log-level", "ERROR"])
         cmd.extend(config.IMMICH_GO_EXTRA_ARGS)
         cmd.append(abs_path)
         return cmd
+
+    @staticmethod
+    def _job_log_dir(job: Job):
+        d = config.STATE_DIR / "logs" / job.id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @staticmethod
+    def _prune_log_dirs() -> None:
+        """Keep only the most recent job log directories (best-effort)."""
+        base = config.STATE_DIR / "logs"
+        try:
+            dirs = sorted((d for d in base.iterdir() if d.is_dir()),
+                          key=lambda d: d.stat().st_mtime, reverse=True)
+        except OSError:
+            return
+        for old in dirs[_JOB_LOG_DIRS_KEEP:]:
+            shutil.rmtree(old, ignore_errors=True)
+
+    @staticmethod
+    def _resolve_logged_file(raw: str, abs_path: str) -> tuple[str, str]:
+        """Turn immich-go's "<fsname>:<relative>" into (absolute, relative).
+
+        immich-go names its filesystem after the base directory it was pointed
+        at (``fshelper.NewFSWithName``), so "Photos:2020/img.jpg" means
+        <abs_path>/2020/img.jpg when abs_path ends with "Photos". Anything that
+        doesn't fit that shape is passed through untouched rather than guessed.
+        """
+        raw = (raw or "").replace("\\", "/")
+        head, sep, tail = raw.partition(":")
+        if sep and head == os.path.basename(abs_path.rstrip("/")):
+            return os.path.join(abs_path, tail), tail
+        if sep and not os.path.isabs(raw):
+            return os.path.join(abs_path, tail), tail
+        return raw, raw
+
+    def _collect_errors(self, job: Job, log_file, abs_path: str) -> int:
+        """Read back immich-go's JSON log and record every per-file failure.
+
+        Sizes are stat'ed here, while the disk is still mounted: immich-go logs
+        the file and the error but not the size, and the recap is read long
+        after the run.
+        """
+        found = 0
+        try:
+            fh = open(log_file, encoding="utf-8", errors="replace")
+        except OSError:
+            return 0
+        with fh:
+            for line in fh:
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if str(rec.get("level", "")).upper() != "ERROR":
+                    continue
+                raw = rec.get("file")
+                if isinstance(raw, dict):  # assets.Asset logs a group
+                    raw = raw.get("FileName") or raw.get("OriginalFileName") or ""
+                if not isinstance(raw, str):
+                    raw = ""
+                full, rel = self._resolve_logged_file(raw, abs_path)
+                size = None
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    pass
+                found += 1
+                with job._lock:
+                    job.errors_total += 1
+                    if len(job.errors) < _ERR_KEEP:
+                        job.errors.append({
+                            "name": os.path.basename(rel) or rel,
+                            "path": rel,
+                            "size": size,
+                            "kind": rec.get("msg") or "",
+                            "detail": str(rec.get("error") or ""),
+                            "time": rec.get("time") or "",
+                        })
+        if found:
+            log.warning("job=%s %d file error(s) in '%s' — details in %s",
+                        job.id, found, abs_path, log_file)
+        return found
 
     @staticmethod
     def _redacted(cmd: list[str]) -> str:
@@ -640,7 +763,9 @@ class JobManager:
                 state.clear_current()
 
     def _run_one(self, job: Job, abs_path: str) -> int:
-        cmd = self._build_cmd(job, abs_path)
+        job._run_seq += 1
+        log_file = self._job_log_dir(job) / f"{job._run_seq:03d}.jsonl"
+        cmd = self._build_cmd(job, abs_path, str(log_file))
         job.log(f"[cmd] {self._redacted(cmd)}")
         try:
             proc = subprocess.Popen(
@@ -662,6 +787,11 @@ class JobManager:
                 proc.terminate()
         proc.wait()
         job._proc = None
+        # Parse the errors BEFORE clearing _current_abs: the disk must still be
+        # mounted to stat the failed files.
+        n = self._collect_errors(job, log_file, abs_path)
+        if n:
+            job.log(f"[warn] {n} fichier(s) en erreur — détail dans le récapitulatif.")
         job._current_abs = None
         return proc.returncode
 
