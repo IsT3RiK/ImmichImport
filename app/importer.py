@@ -77,6 +77,12 @@ _RE_LIVE = re.compile(
 )
 _RE_REPORT = re.compile(r"^\s*(.+?)\s*:\s*(\d+)\b")
 _RE_IMPORTING = re.compile(r"=== Importing '(.*)' ===")
+# Characters immich-go reads as a glob pattern in a path argument
+# (fshelper.HasMagic, Unix): such a path is expanded instead of opened, so a
+# folder such as "Vacances [2013]" matches nothing - or another folder. There
+# is no escape syntax; see _immich_go_arg.
+_GLOB_MAGIC = re.compile(r"[*?\[\\]")
+_GLOB_SAFE = str.maketrans({"[": "(", "]": ")", "*": "_", "?": "_", "\\": "_"})
 
 # immich-go event names (fileevent.Code.String(), v0.32.0) -> our counters.
 # The same strings are the event "msg" in its JSON log AND the labels of its
@@ -609,24 +615,25 @@ class JobManager:
             return None
 
     @staticmethod
-    def _resolve_logged_file(raw: str, roots: list[tuple[str, str]]
+    def _resolve_logged_file(raw: str, roots: list[tuple[str, str, str]]
                              ) -> tuple[str, str | None]:
         """Turn immich-go's "<fsname>:<relative>" into (absolute, folder).
 
-        immich-go names each filesystem after the base directory it was
-        pointed at, so "Photos:2020/img.jpg" means <root>/2020/img.jpg for the
-        selected root ending with "Photos". Two selected folders can share a
-        name; the file's existence then decides. Anything that doesn't fit is
-        passed through untouched rather than guessed.
+        ``roots`` holds (folder, real absolute path, argument given to
+        immich-go). immich-go names each filesystem after the base name of its
+        argument, so "Photos:2020/img.jpg" means <root>/2020/img.jpg for the
+        argument ending with "Photos". Two selected folders can share a name;
+        the file's existence then decides. Anything that doesn't fit is passed
+        through untouched rather than guessed.
         """
         raw = (raw or "").replace("\\", "/")
         head, sep, tail = raw.partition(":")
         if not sep:
             return raw, None
-        matches = [(rel, ab) for rel, ab in roots
-                   if os.path.basename(ab.rstrip("/")) == head]
+        matches = [(rel, ab) for rel, ab, arg in roots
+                   if os.path.basename(arg.rstrip("/")) == head]
         if not matches and len(roots) == 1 and not os.path.isabs(raw):
-            matches = roots
+            matches = [(roots[0][0], roots[0][1])]
         for rel, ab in matches:
             full = os.path.join(ab, tail)
             if len(matches) == 1 or os.path.exists(full):
@@ -652,7 +659,7 @@ class JobManager:
         return ", ".join(extra)
 
     def _record_error(self, job: Job, rec: dict,
-                      roots: list[tuple[str, str]]) -> bool:
+                      roots: list[tuple[str, str, str]]) -> bool:
         """Record one ERROR-level log record. Returns True for a file error.
 
         Two shapes come out of that log and they must not be mixed:
@@ -726,6 +733,36 @@ class JobManager:
         return True
 
     @staticmethod
+    def _immich_go_arg(job: Job, abs_path: str, link_dir) -> str:
+        """The path to hand immich-go for ``abs_path``.
+
+        immich-go expands any argument containing * ? [ or \\ as a glob
+        pattern, and offers no way to escape them. Such a folder is passed
+        through a symbolic link with a plain name instead. The link's name is
+        the folder's own name with those characters replaced, because
+        immich-go names the album of the files sitting directly in the folder
+        (and the first level of a PATH album) after its argument.
+        """
+        if not _GLOB_MAGIC.search(abs_path):
+            return abs_path
+        name = os.path.basename(abs_path.rstrip("/"))
+        safe = name.translate(_GLOB_SAFE) if _GLOB_MAGIC.search(name) else name
+        link = link_dir / safe
+        try:
+            link_dir.mkdir(parents=True, exist_ok=True)
+            os.symlink(abs_path, link)
+        except OSError as exc:
+            job.log(f"[warn] Impossible de contourner les caractères spéciaux "
+                    f"de '{abs_path}' ({exc}) : immich-go risque de ne pas "
+                    f"trouver ce dossier.")
+            return abs_path
+        if safe != name:
+            job.log(f"[info] '{name}' contient des caractères qu'immich-go lit "
+                    f"comme un motif ([ ] * ? \\) : il lui est transmis sous le "
+                    f"nom '{safe}', qui sera aussi celui de son album.")
+        return str(link)
+
+    @staticmethod
     def _parse_record(line: str) -> dict | None:
         line = line.strip()
         if not line.startswith("{"):
@@ -737,7 +774,7 @@ class JobManager:
         return rec if isinstance(rec, dict) else None
 
     def _read_events(self, job: Job, rfd: int, keep_file,
-                     roots: list[tuple[str, str]]) -> None:
+                     roots: list[tuple[str, str, str]]) -> None:
         """Drain immich-go's live JSON log. It must never stop reading: a full
         pipe would block immich-go itself, so every record is handled in its
         own try."""
@@ -766,7 +803,7 @@ class JobManager:
                 keep.close()
 
     def _collect_errors(self, job: Job, log_file,
-                        roots: list[tuple[str, str]]) -> None:
+                        roots: list[tuple[str, str, str]]) -> None:
         """Fallback without the event pipe: read the ERROR log back after the
         run."""
         try:
@@ -954,14 +991,19 @@ class JobManager:
         log_dir = self._job_log_dir(job)
         keep_file = log_dir / f"{job._run_seq:03d}.jsonl"
         pipe_path = log_dir / f"{job._run_seq:03d}.pipe"
-        roots = [(f.path, ab) for f, ab in runnable]
         abs_paths = [ab for _, ab in runnable]
+        link_root = log_dir / f"{job._run_seq:03d}.links"
+        # One sub-directory per folder: two folders may end up with the same
+        # link name.
+        args = [self._immich_go_arg(job, ab, link_root / str(i))
+                for i, ab in enumerate(abs_paths)]
+        roots = [(f.path, ab, arg) for (f, ab), arg in zip(runnable, args)]
 
         pipe = self._open_event_pipe(pipe_path)
         if pipe:
-            cmd = self._build_cmd(job, abs_paths, str(pipe_path), "INFO")
+            cmd = self._build_cmd(job, args, str(pipe_path), "INFO")
         else:
-            cmd = self._build_cmd(job, abs_paths, str(keep_file), "ERROR")
+            cmd = self._build_cmd(job, args, str(keep_file), "ERROR")
         job.log(f"[cmd] {self._redacted(cmd)}")
 
         reader = None
@@ -1006,6 +1048,7 @@ class JobManager:
                 # Before clearing _current_roots: the disk must still be
                 # mounted to stat the failed files.
                 self._collect_errors(job, keep_file, roots)
+            shutil.rmtree(link_root, ignore_errors=True)  # the links, never their targets
             job._proc = None
             job._current_roots = []
             if job.errors_total:

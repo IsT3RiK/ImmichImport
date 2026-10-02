@@ -188,6 +188,11 @@ premier envoi, il lit l'index complet de votre serveur Immich puis ses albums
 (« Lecture de l'index Immich », « Lecture des albums ») : sur une grosse
 photothèque, cette étape peut prendre quelques minutes, une seule fois.
 
+`immich-go` lit `[ ] * ? \` dans un chemin comme un motif de recherche. Un
+dossier coché dont le nom en contient lui est donc transmis sous un nom où ils
+sont remplacés (`Vacances [2013]` devient `Vacances (2013)`) : c'est ce nom que
+prend son album.
+
 Pendant le transfert : avancement global, envois, doublons et erreurs comptés en
 direct, temps restant, cadence, et l'état de chaque dossier (✅ terminé,
 ⏳ en cours, ❌ fichiers en erreur, ⏹ annulé). À la fin, un
