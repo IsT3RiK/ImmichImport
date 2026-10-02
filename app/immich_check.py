@@ -30,15 +30,18 @@ DEFAULT_PORT = 2283
 
 
 # --- low-level HTTP ----------------------------------------------------------
-def _request(url: str, api_key: str | None = None, timeout: float = PROBE_TIMEOUT):
-    """GET ``url`` → (status:int|None, body:bytes|None, err:str|None).
+def _request(url: str, api_key: str | None = None, timeout: float = PROBE_TIMEOUT,
+             method: str = "GET", data: bytes | None = None):
+    """Request ``url`` → (status:int|None, body:bytes|None, err:str|None).
 
     ``status is None`` means the host was unreachable (DNS/refused/timeout).
     """
     headers = {"Accept": "application/json"}
     if api_key:
         headers["x-api-key"] = api_key
-    req = urllib.request.Request(url, headers=headers, method="GET")
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read(), None
@@ -123,13 +126,14 @@ def check_credentials(raw_url: str, api_key: str) -> dict:
     """Validate (URL, key). Reports the account, version and per-scope permissions.
 
     Return shape mirrors the frontend's expectations:
-      {ok, error, user:{email,name}|None, version, permissions:{account, albums}}
+      {ok, error, user:{email,name}|None, version,
+       permissions:{account, albums, jobs}}
     """
     base = normalize_immich_url(raw_url)
     if not base.lower().startswith(("http://", "https://")):
         base = "http://" + base
 
-    empty_perms = {"account": "unknown", "albums": "unknown"}
+    empty_perms = {"account": "unknown", "albums": "unknown", "jobs": "unknown"}
 
     # 1) Identity: /users/me proves the key is accepted and reachable.
     me_status = None
@@ -163,7 +167,23 @@ def check_credentials(raw_url: str, api_key: str) -> dict:
     # 2) Album read permission (only matters when album mode is on).
     albums_status, _, _ = _request(base + "/api/albums", api_key=api_key, timeout=CHECK_TIMEOUT)
 
-    permissions = {"account": "ok", "albums": _perm_from(albums_status)}
+    # 3) Job control. immich-go pauses Immich's background jobs during the
+    # upload (PUT /api/jobs/<name>: admin key with job.create) and refuses to
+    # start when it can't. The same route is called with an invalid job name
+    # and no command: Immich checks the rights first (403 when missing), then
+    # rejects the request itself (400) — nothing is ever paused.
+    jobs_status, _, _ = _request(base + "/api/jobs/immich-import-permission-check",
+                                 api_key=api_key, timeout=CHECK_TIMEOUT,
+                                 method="PUT", data=b"{}")
+    if jobs_status == 403:
+        jobs_perm = "missing"
+    elif jobs_status is not None and 400 <= jobs_status < 500 and jobs_status not in (401, 404):
+        jobs_perm = "ok"
+    else:
+        jobs_perm = "unknown"
+
+    permissions = {"account": "ok", "albums": _perm_from(albums_status),
+                   "jobs": jobs_perm}
     version = _fetch_version(base, PROBE_TIMEOUT, api_key=api_key)
     return {"ok": True, "error": None, "user": user, "version": version, "permissions": permissions}
 

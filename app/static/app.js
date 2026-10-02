@@ -232,6 +232,9 @@ $resumeDiscard.addEventListener("click", async () => {
 const countQueue = [];
 let countActive = 0;
 const COUNT_CONCURRENCY = 4;
+// Counts the server deferred because an import is reading the disk: asked
+// again once the import is over (see setRunning).
+let deferredCounts = [];
 
 function enqueueCount(path, el) {
   countQueue.push({ path, el });
@@ -244,6 +247,10 @@ function pumpCounts() {
     fetch(`/api/count?path=${encodeURIComponent(path)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
+        if (d && d.deferred) {
+          deferredCounts.push({ path, el });
+          return;
+        }
         if (d && el.isConnected) el.innerHTML = badgeInner(d.photos, d.videos);
         if (d) markIfEmptyRoot(path, d);
       })
@@ -556,42 +563,11 @@ const S = {
   samples: [], windowSpan: 0, etaShown: 0, lastRateTs: 0,
   rate: 0, flatTicks: 0,
   procRate: 0,
-  // Exact number of assets to import, summed from the tree's recursive counts
-  // (authoritative, known up-front) — NOT immich-go's slow, drip-fed `found`.
-  // This is what makes the ETA trustworthy.
-  expectedTotal: 0,
 };
 
-// Total assets across the currently-selected top-most folders, taken from the
-// backend's recursive count (the same figure shown in the Σ badges). Summed at
-// import start so the ETA/remaining/% are anchored to a real target instead of
-// immich-go's laggy discovery counter.
-async function computeExpectedTotal(paths) {
-  let total = 0;
-  for (const p of paths || []) {
-    try {
-      const d = await fetchJson(`/api/count?path=${encodeURIComponent(p)}`);
-      if (d) total += (d.photos || 0) + (d.videos || 0);
-    } catch (_) { /* ignore a single failed count */ }
-  }
-  return total;
-}
-
-// Assets immich-go has already classified (sent, duplicate, errored, …). Used
-// with expectedTotal to derive an accurate remaining count and %.
-function processedCount(p) {
-  return (p.uploaded || 0) + (p.dups || 0) + (p.errors || 0) +
-    (p.unsupported || 0) + (p.upgraded || 0);
-}
-
-// Remaining assets: prefer our exact tree total; fall back to immich-go's own
-// `remaining` only when we don't have a tree count yet.
-function expectedRemaining(p) {
-  if (S.expectedTotal > 0) {
-    return Math.max(S.expectedTotal - processedCount(p), 0);
-  }
-  return p.remaining || 0;
-}
+// Every figure (processed, remaining, %, target) comes from the server, which
+// anchors them on the tree's exact asset count for the run (`expected`) and
+// counts duplicates from immich-go's own events — nothing is estimated here.
 
 // Bounded in-memory log tail (debug fold only). We never render the whole
 // thing: append to a ring buffer and only paint the <pre> when the fold is
@@ -627,7 +603,6 @@ function startStats(dryRun) {
   S.samples = [];
   S.windowSpan = 0;
   S.etaShown = 0;
-  S.expectedTotal = 0;
   clearLogs();
   $recap.hidden = true;
   $recap.innerHTML = "";
@@ -651,28 +626,17 @@ function applyProgress(p) {
       `<span class="live-badge"><span class="live-dot"></span>${t("live.badge")}</span>`;
     return;
   }
-  // Prefer our exact tree total for the % and remaining count; fall back to
-  // immich-go's own figures until computeExpectedTotal() resolves.
-  const remaining = expectedRemaining(p);
-  let pct;
-  if (S.expectedTotal > 0) {
-    pct = Math.min(100, Math.round(processedCount(p) / S.expectedTotal * 100));
-  } else {
-    pct = p.pct || 0;
-  }
+  const remaining = p.remaining || 0;
+  const pct = p.pct || 0;
   $progressFill.style.width = pct + "%";
   $progressPct.textContent =
-    (S.expectedTotal > 0 || p.found > 0)
-      ? pct + " %"
-      : t("progress.preparingIndex");
-  const foundLabel = S.expectedTotal > 0 ? S.expectedTotal : p.found;
+    (p.target > 0) ? pct + " %" : t("progress.preparingIndex");
   $progressStats.innerHTML =
     chip("📤", t("chip.uploaded"), p.uploaded) +
-    chip("🔁", t("chip.dups"), p.dupsEstimated ? "≈ " + I18N.n(p.dups) : p.dups,
-      p.dupsEstimated ? "est" : "") +
+    chip("🔁", t("chip.dups"), p.dups) +
     chip("⚠️", t("chip.errors"), p.errors, p.errors > 0 ? "err" : "") +
     chip("⏳", t("chip.remaining"), remaining) +
-    chip("📦", t("chip.toImport"), foundLabel);
+    chip("📦", t("chip.toImport"), p.target || 0);
   updateLiveHead(p, remaining);
 }
 
@@ -680,12 +644,12 @@ function applyProgress(p) {
 // immich-go's --no-ui output has no per-file names, so we describe the phase
 // (scanning / uploading / de-duplicating) rather than fake a per-file bar.
 function updateLiveHead(p, remaining) {
-  if (remaining == null) remaining = expectedRemaining(p);
+  if (remaining == null) remaining = p.remaining || 0;
   const now = Date.now();
   const dt = (now - S.lastRateTs) / 1000;
   if (dt >= 1) {
     // Upload rate (for the "N /s" readout and the phase heuristic).
-    const proc = processedCount(p);
+    const proc = p.processed || 0;
     const up = p.uploaded || 0;
     S.samples.push({ t: now, p: proc, u: up });
     while (S.samples.length > 2 && now - S.samples[0].t > RATE_WINDOW_MS) {
@@ -695,22 +659,27 @@ function updateLiveHead(p, remaining) {
     const span = (now - first.t) / 1000;
     S.windowSpan = span;
     if (span >= 1) {
-      // Rate across the whole window: a stall lowers it gradually instead of
-      // leaving a stale optimistic value in place, and a duplicate burst can't
-      // spike it either — both are already averaged in.
-      const procRate = Math.max(0, (proc - first.p) / span);
-      const upRate = Math.max(0, (up - first.u) / span);
-      S.procRate = S.procRate ? S.procRate * 0.75 + procRate * 0.25 : procRate;
-      S.rate = S.rate ? S.rate * 0.75 + upRate * 0.25 : upRate;
+      // Rate across the whole window, used as is: the window already averages
+      // a duplicate burst and a slow upload. No extra smoothing on top — a
+      // decaying average never reaches zero, so a stall used to shrink the
+      // rate to 0.0000004 /s and blow the ETA up to millions of hours.
+      S.procRate = Math.max(0, (proc - first.p) / span);
+      S.rate = Math.max(0, (up - first.u) / span);
       // "Nothing is being uploaded but assets keep being classified" = the
       // duplicate-skipping phase. Derived from the window, not from tick luck.
       S.flatTicks = (S.rate < 0.05 && S.procRate > 0.2) ? S.flatTicks + 1 : 0;
     }
     S.lastRateTs = now;   // échantillonnage cadencé à ~1 Hz
   }
+  // Before its first upload, immich-go downloads the Immich server's whole
+  // asset index, then every album: phases the user must see named as such,
+  // not as a scan of their disk.
   let phase, indeterminate = false;
-  if (p.readPct < 100 && p.found > 0 && (p.uploaded || 0) === 0) {
-    phase = t("phase.scanning", { pct: p.readPct });
+  if (p.phase === "index") {
+    phase = t("phase.index", { pct: p.readPct || 0 });
+    indeterminate = true;
+  } else if (p.phase === "albums") {
+    phase = t("phase.albums", { count: p.albumsRead || 0 });
     indeterminate = true;
   } else if (S.flatTicks >= 3 && remaining > 0) {
     phase = t("phase.dedup");
@@ -790,7 +759,8 @@ function finishStats(d) {
   // Retain the result so relocalize() can re-render the recap in a new language
   // without recomputing the timings.
   S.recapData = d;
-  S.recapExpected = S.expectedTotal;  // ce que l'arborescence annonçait
+  // ce que l'arborescence annonçait
+  S.recapExpected = (d && d.progress && d.progress.expected) || 0;
   S.recapSecs = secs;
   S.recapDry = S.dryRun;
   S.errorsOpen = false;   // chaque job repart avec son panneau replié
@@ -817,6 +787,7 @@ function renderRecap() {
     (p.upgraded ? recapRow(t("recap.upgraded"), p.upgraded) : "") +
     recapRow(t("recap.dups"), dupsStr) +
     (p.unsupported ? recapRow(t("recap.unsupported"), p.unsupported) : "") +
+    (p.filtered ? recapRow(t("recap.filtered"), p.filtered) : "") +
     // A bare "9 errors" is unactionable: make the figure open the list of the
     // files that actually failed (fetched lazily from /api/jobs/<id>/errors).
     (p.errors
@@ -986,6 +957,7 @@ function renderJobFolders(folders, status) {
   if (status !== undefined) lastJobStatus = status;
   const glyph = (s) => ({
     done: "✅", running: "⏳", failed: "❌", interrupted: "⏸", pending: "•",
+    cancelled: "⏹",
   })[s] || "•";
   const items = folders.map((f) =>
     `<li>${glyph(f.status)} ${f.path === "" ? t("common.root") : escapeHtml(f.path)}</li>`
@@ -1058,16 +1030,6 @@ function attachStream(jobId, snap) {
     renderJobFolders(snap.folders, snap.status);
     revealJobFolders(snap.paths);
     if (snap.progress) applyProgress(snap.progress);
-    // Anchor the ETA to the exact asset count from the tree. Only count folders
-    // that still need work (on a resume, the done ones are skipped as dups but
-    // aren't re-counted here) — falls back to immich-go's `remaining` until it
-    // resolves. Covers all three entry points: import, resume and reattach.
-    const pending = (snap.folders || []).filter((f) => f.status !== "done")
-      .map((f) => f.path);
-    const anchorPaths = pending.length ? pending : (snap.paths || []);
-    computeExpectedTotal(anchorPaths).then((t) => {
-      if (S.active && currentJobId === jobId) S.expectedTotal = t;
-    });
   }
   lastEventTs = Date.now();
   const es = new EventSource(`/api/jobs/${jobId}/stream`);
@@ -1203,6 +1165,13 @@ function setRunning(v) {
   $import.disabled = v || collectSelection().length === 0;
   $dryRun.disabled = v;
   $cancel.hidden = !v;
+  if (!v && deferredCounts.length) {
+    const retry = deferredCounts;
+    deferredCounts = [];
+    for (const { path, el } of retry) {
+      if (el.isConnected) enqueueCount(path, el);
+    }
+  }
 }
 // Localized status: retains the key/params so relocalize() can re-translate the
 // status line when the language changes. Prefer this over setStatus().
@@ -1378,7 +1347,10 @@ async function boot() {
   setInterval(streamWatchdog, 4000);
 }
 
-document.getElementById("reload").addEventListener("click", () => {
+document.getElementById("reload").addEventListener("click", async () => {
+  // Reload means "read the disk again": forget the cached counts first.
+  try { await fetch("/api/count/refresh", { method: "POST" }); } catch (_) { /* ignore */ }
+  deferredCounts = [];
   treeGeneration++;
   nodes.clear();
   emptyRoots = new Set();

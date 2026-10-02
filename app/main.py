@@ -216,11 +216,25 @@ def get_scan(path: str = Query(""), top: int = Query(30, ge=1, le=200),
 @app.get("/api/count")
 def get_count(path: str = Query(""), lang: str = Depends(get_lang)) -> dict:
     try:
-        return fs.recursive_count(path)
+        # While an import runs, immich-go is reading the same (slow) disk: a
+        # count missing from the cache is deferred rather than walked, and the
+        # tree asks again once the import is over.
+        res = fs.recursive_count(path, walk=not manager.is_running())
+        if res is None:
+            return {"path": path, "photos": None, "videos": None, "deferred": True}
+        return res
     except fs.UnsafePathError:
         raise HTTPException(status_code=400, detail=i18n.tr("err.invalidPath", lang))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=i18n.tr("err.folderNotFound", lang))
+
+
+@app.post("/api/count/refresh")
+def refresh_counts() -> dict:
+    """Forget cached counts (the tree's reload button): the next counts are
+    read from the disk again."""
+    fs.clear_count_cache()
+    return {"cleared": True}
 
 
 @app.post("/api/import")

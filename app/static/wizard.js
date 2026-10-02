@@ -36,6 +36,7 @@
     { token: "asset.read", required: false },
     { token: "album.create", required: false },
     { token: "album.read", required: false },
+    { token: "job.create", required: true },
   ];
 
   const S = {
@@ -357,6 +358,7 @@
       html += `<ul class="wiz-perms">
         ${permRow(S.check.permissions.account, t("check.account.label"), t("check.account.hint"))}
         ${permRow(S.check.permissions.albums, t("check.albums.label"), t("check.albums.hint"))}
+        ${permRow(S.check.permissions.jobs, t("check.jobs.label"), t("check.jobs.hint"))}
       </ul></div>`;
     }
     return html + `</div>`;
@@ -605,7 +607,7 @@
       S.check = await r.json();
     } catch (_) {
       S.check = { ok: false, error: null, user: null, version: null,
-                  permissions: { account: "unknown", albums: "unknown" } };
+                  permissions: { account: "unknown", albums: "unknown", jobs: "unknown" } };
     } finally {
       S.verifying = false; render();
     }

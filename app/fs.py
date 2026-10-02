@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -84,6 +85,7 @@ def root_status() -> dict:
     disks: list[dict] = []
     entry_count = 0
     accessible = False
+    sig: list[tuple] = []
     if exists:
         try:
             with os.scandir(root) as it:
@@ -100,6 +102,10 @@ def root_status() -> dict:
                         is_mount = os.path.ismount(p)
                     except OSError:
                         is_mount = False
+                    try:
+                        sig.append((entry.name, entry.stat(follow_symlinks=False).st_dev))
+                    except OSError:
+                        sig.append((entry.name, None))
                     disks.append({
                         "name": entry.name,
                         "path": to_rel(p),
@@ -109,6 +115,7 @@ def root_status() -> dict:
         except (PermissionError, OSError):
             accessible = False
     disks.sort(key=lambda d: d["name"].lower())
+    _check_disk_signature(tuple(sorted(sig, key=lambda x: x[0])))
     return {
         "exists": exists,
         "accessible": accessible,
@@ -207,21 +214,93 @@ def _walk_kept(base: Path):
         yield root_rel, files
 
 
-def recursive_count(rel: str) -> dict:
-    """Walk ``rel`` fully and return total photo/video counts."""
+# --- recursive count cache ----------------------------------------------------
+# A recursive count walks a whole subtree of a slow USB disk. The tree asks for
+# one per visible folder, so without a cache the same files were walked once
+# per level of the tree, again on every reload, and again while immich-go was
+# reading that same disk. One walk now fills the cache for EVERY folder below
+# the one asked for, so unfolding the tree afterwards costs nothing.
+_COUNT_TTL = 30 * 60
+_count_cache: dict[str, tuple[float, int, int]] = {}
+_cache_lock = threading.Lock()
+# One walk at a time per disk: a child requested while its parent is being
+# walked waits, then finds its figure in the cache instead of re-reading it.
+_walk_locks: dict[str, threading.Lock] = {}
+_disk_sig: tuple | None = None
+
+
+def _check_disk_signature(sig: tuple) -> None:
+    """Drop every cached count when the set of mounted disks changes: a disk
+    swapped under the same name must not inherit the previous one's figures."""
+    global _disk_sig
+    with _cache_lock:
+        if _disk_sig is not None and sig != _disk_sig:
+            _count_cache.clear()
+            log.info("disk change detected - count cache cleared")
+        _disk_sig = sig
+
+
+def clear_count_cache() -> None:
+    with _cache_lock:
+        _count_cache.clear()
+
+
+def _cached(rel: str) -> dict | None:
+    with _cache_lock:
+        hit = _count_cache.get(rel)
+    if not hit or time.monotonic() - hit[0] > _COUNT_TTL:
+        return None
+    return {"path": rel, "photos": hit[1], "videos": hit[2]}
+
+
+def _walk_lock(rel: str) -> threading.Lock:
+    disk = rel.split("/", 1)[0]
+    with _cache_lock:
+        return _walk_locks.setdefault(disk, threading.Lock())
+
+
+def recursive_count(rel: str, walk: bool = True) -> dict | None:
+    """Total photo/video counts of ``rel`` and its subfolders.
+
+    Served from the cache when possible. With ``walk=False`` a cache miss
+    returns None instead of reading the disk.
+    """
     base = safe_resolve(rel)
-    photos = videos = 0
-    for root_rel, files in _walk_kept(base):
-        for name in files:
-            file_rel = f"{root_rel}/{name}" if root_rel else name
-            if banned_reason(file_rel, False):
+    key = to_rel(base)
+    hit = _cached(key)
+    if hit or not walk:
+        return hit
+    with _walk_lock(key):
+        hit = _cached(key)  # filled meanwhile by the walk of an ancestor
+        if hit:
+            return hit
+        direct: dict[str, list[int]] = {}
+        for root_rel, files in _walk_kept(base):
+            counts = direct.setdefault(root_rel, [0, 0])
+            for name in files:
+                file_rel = f"{root_rel}/{name}" if root_rel else name
+                if banned_reason(file_rel, False):
+                    continue
+                kind = _classify(name)
+                if kind == "photo":
+                    counts[0] += 1
+                elif kind == "video":
+                    counts[1] += 1
+        # Fold every folder into its parent, deepest first, so each one ends
+        # up holding its whole subtree.
+        for d in sorted(direct, key=lambda r: r.count("/"), reverse=True):
+            if d == key:
                 continue
-            kind = _classify(name)
-            if kind == "photo":
-                photos += 1
-            elif kind == "video":
-                videos += 1
-    return {"path": to_rel(base), "photos": photos, "videos": videos}
+            parent = d.rsplit("/", 1)[0] if "/" in d else ""
+            if parent in direct:
+                direct[parent][0] += direct[d][0]
+                direct[parent][1] += direct[d][1]
+        now = time.monotonic()
+        with _cache_lock:
+            for d, (photos, videos) in direct.items():
+                _count_cache[d] = (now, photos, videos)
+        photos, videos = direct.get(key, [0, 0])
+    return {"path": key, "photos": photos, "videos": videos}
 
 
 def scan_report(rel: str, top: int = 30) -> dict:

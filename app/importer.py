@@ -1,19 +1,22 @@
 """Background import job manager driving the immich-go binary.
 
 A single job runs at a time (imports touch the same Immich server). Each job
-runs immich-go once per selected folder, streaming combined stdout/stderr into
-an in-memory log buffer exposed via polling or SSE.
+runs immich-go ONCE over every selected folder. immich-go starts by
+downloading the whole Immich asset index and every album before it sends a
+single file; running it once per folder repeated that preparation (and the
+pause/resume of Immich's background jobs) for each folder.
 
 Resilience: progress is tracked per folder and persisted to STATE_DIR after
 every transition. A monitor thread watches the disk while the import runs; if
 the disk is unplugged (or the container restarts mid-import) the job is marked
-``interrupted`` and kept resumable. Resuming re-runs only the folders not yet
+``interrupted`` and kept resumable. Resuming re-runs the folders not yet
 ``done`` — immich-go's per-file checksum dedup skips whatever was already
-uploaded inside a partially-imported folder.
+uploaded.
 
-Live counters (uploaded / found / duplicates / errors) are parsed from
-immich-go's output *server-side* (see ``Progress``) so every window gets the
-authoritative numbers from ``/api/jobs/active`` without replaying the whole log.
+Live counters are taken from immich-go's own per-file events, streamed through
+a FIFO as its JSON log (see ``_open_event_pipe``): every upload, duplicate and
+error is counted as it happens, nothing is estimated. Its stdout progress line
+only supplies the index-read percentage and the number of assets found.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -34,7 +38,8 @@ from . import config, fs, logging_setup, settings, state
 log = logging_setup.get_logger("job")
 
 JobStatus = Literal["running", "success", "error", "cancelled", "interrupted"]
-FolderStatus = Literal["pending", "running", "done", "failed", "interrupted"]
+FolderStatus = Literal["pending", "running", "done", "failed", "interrupted",
+                       "cancelled"]
 
 # Number of trailing log lines persisted so a resume prompt can show context.
 _LOG_TAIL = 40
@@ -45,7 +50,7 @@ _LOG_TAIL = 40
 # report scrolled out of reach within minutes.
 _LOG_KEEP = int(os.environ.get("LOG_KEEP") or 20000)
 # Per-file errors kept in memory for the UI. The full list always stays on disk
-# in the immich-go JSON log, so this cap only bounds what the recap can list.
+# in the job's .jsonl file, so this cap only bounds what the recap can list.
 _ERR_KEEP = 500
 # Generic (file-less) problems kept, deduplicated: "failed to create album",
 # "<folder>: file does not exist"...
@@ -58,196 +63,158 @@ _ERR_KEYS = ("error", "err", "reason", "message")
 _META_KEYS = {"time", "level", "msg", "file", "source"}
 # immich-go log directories retained under STATE_DIR (one per job).
 _JOB_LOG_DIRS_KEEP = 10
+# How long immich-go gets to shut down cleanly after SIGINT (resume Immich's
+# background jobs, flush pending album additions) before it is killed.
+_STOP_GRACE = 90.0
+# immich-go's final error when the run went to the end but some files failed
+# (with --on-errors=continue). Any other final error means the run itself broke.
+_FILE_ERRORS_ONLY = "Some errors have occurred"
 
-# immich-go (--no-ui) prints a progress line ~every 500ms, plus a per-folder
-# final report with "  <label> : <n>" lines. We parse both server-side so every
-# window gets authoritative counters without replaying the whole log.
+# immich-go (--no-ui) prints a progress line ~every 500ms. "Immich read" is the
+# share of the SERVER's asset index downloaded so far — not the local disk.
 _RE_LIVE = re.compile(
     r"Immich read (\d+)%, Assets found: (\d+), Upload errors: (\d+), Uploaded (\d+)"
 )
 _RE_REPORT = re.compile(r"^\s*(.+?)\s*:\s*(\d+)\b")
 _RE_IMPORTING = re.compile(r"=== Importing '(.*)' ===")
-# Order matters: the first needle contained in the label wins. immich-go's
-# "discovered ..." counters describe what the SCAN saw and silently dropped;
-# the "uploaded/discarded ..." ones describe what the UPLOAD did with the
-# assets that survived. Both are needed to explain an "announced vs processed"
-# gap, so the exclusions stop being invisible.
-_REPORT_LABELS = [
-    ("discovered banned file", "disc_banned"),
-    ("discovered unknown file", "disc_unknown"),
-    ("discovered unsupported file", "disc_unsupported"),
-    ("uploaded successfully", "uploaded"),
-    ("server asset upgraded", "upgraded"),
-    ("server has duplicate", "server_dup"),
-    ("discarded local duplicate", "local_dup"),
-    ("discarded unsupported", "unsupported"),
-    ("upload failed", "errors"),
-    ("server error", "errors"),
-    ("file access error", "errors"),
-    ("incomplete processing", "errors"),
-]
+
+# immich-go event names (fileevent.Code.String(), v0.32.0) -> our counters.
+# The same strings are the event "msg" in its JSON log AND the labels of its
+# end-of-run report, so both sources share this table. Keep it in sync when
+# bumping immich-go. The "discovered ..." ones describe what the SCAN dropped
+# before any upload; they explain an "announced vs found" gap.
+_EVENT_KEYS = {
+    "uploaded successfully": "uploaded",
+    "server asset upgraded": "upgraded",
+    "server has duplicate": "server_dup",
+    "discarded server better": "server_dup",
+    "discarded local duplicate": "local_dup",
+    "discarded unsupported": "unsupported",
+    "discarded banned": "filtered",
+    "discarded filtered": "filtered",
+    "discarded not selected": "filtered",
+    "upload failed": "errors",
+    "server error": "errors",
+    "file access error": "errors",
+    "incomplete processing": "errors",
+    "discovered banned file": "disc_banned",
+    "discovered unknown file": "disc_unknown",
+    "discovered unsupported file": "disc_unsupported",
+}
+_COUNTERS = ("uploaded", "upgraded", "server_dup", "local_dup", "unsupported",
+             "filtered", "errors", "disc_banned", "disc_unknown",
+             "disc_unsupported")
 
 
 class Progress:
-    """Authoritative live tally parsed from immich-go output.
+    """Authoritative live tally of one immich-go run.
 
-    Duplicates only surface in immich-go's end-of-folder report, never in the
-    live line, so per-folder report values are staged in ``rep`` and folded into
-    the cumulative totals when the folder closes (next folder, or job end via
-    ``finalize()``). Totals accumulate across every folder of the job.
+    Two sources, in order of preference:
+
+    * ``event()`` — immich-go's per-file events, streamed live from its JSON
+      log. Exact, including duplicates, as they happen.
+    * ``feed()`` — its stdout: the live progress line (index read %, assets
+      found, uploads) and, as a fallback when the event stream is unavailable,
+      the end-of-run report.
+
+    Duplicates are never guessed: a figure is shown only once immich-go has
+    reported it.
     """
 
     def __init__(self) -> None:
-        self.cum = dict(uploaded=0, upgraded=0, server_dup=0, local_dup=0,
-                        unsupported=0, errors=0, found=0,
-                        disc_banned=0, disc_unknown=0, disc_unsupported=0)
-        self.cur = dict(found=0, uploaded=0, errors=0, read_pct=0)
-        self.rep: dict[str, int] = {}
-        self.folder_open = False
+        self.ev = dict.fromkeys(_COUNTERS, 0)
+        self.live_events = False
+        self.rep_raw: dict[str, int] = {}
+        self.found = 0
+        self.live_uploaded = 0
+        self.live_errors = 0
+        self.read_pct = 0
+        # immich-go prints "Immich read 100%" until it knows the size of the
+        # index, so 100 % means nothing until a lower value has been seen.
+        self.index_partial = False
+        self.index_done = False
+        self.albums_read = 0
+        self.expected = 0  # assets announced by the tree for this run
         self.current_folder: str | None = None
-        self._stall = 0  # consecutive full-read ticks with no upload progress
-
-    @staticmethod
-    def _reconcile_dups(found, up, err, upg, uns, sdup, ldup):
-        """Derive the true duplicate count arithmetically so a missing or
-        renamed immich-go report label can never leave it wrongly at 0.
-
-        Everything discovered (``found``) that was neither uploaded, errored,
-        upgraded nor unsupported IS a duplicate. Any duplicate the text report
-        didn't label is attributed to the server side (local duplicates are
-        always reported reliably as "discarded local duplicate").
-        """
-        arith = found - up - err - upg - uns
-        if arith < 0:
-            arith = 0
-        extra = arith - (sdup + ldup)
-        if extra > 0:
-            sdup += extra
-        return sdup, ldup
-
-    def _fold(self) -> None:
-        if not self.folder_open:
-            return
-        up = self.rep.get("uploaded", self.cur["uploaded"])
-        upg = self.rep.get("upgraded", 0)
-        uns = self.rep.get("unsupported", 0)
-        err = self.rep.get("errors", self.cur["errors"])
-        sdup, ldup = self._reconcile_dups(
-            self.cur["found"], up, err, upg, uns,
-            self.rep.get("server_dup", 0), self.rep.get("local_dup", 0))
-        self.cum["uploaded"] += up
-        self.cum["upgraded"] += upg
-        self.cum["unsupported"] += uns
-        self.cum["errors"] += err
-        self.cum["server_dup"] += sdup
-        self.cum["local_dup"] += ldup
-        self.cum["found"] += self.cur["found"]
-        for key in ("disc_banned", "disc_unknown", "disc_unsupported"):
-            self.cum[key] += self.rep.get(key, 0)
-        self.cur = dict(found=0, uploaded=0, errors=0, read_pct=0)
-        self.rep = {}
-        self.folder_open = False
-        self._stall = 0
 
     def feed(self, line: str) -> None:
         mi = _RE_IMPORTING.search(line)
         if mi:
-            self._fold()               # close previous folder, if any
-            self.folder_open = True
             self.current_folder = mi.group(1)
             return
         m = _RE_LIVE.search(line)
         if m:
-            self.folder_open = True
-            read_pct = int(m.group(1))
-            new_up = int(m.group(4))
-            # Detect duplicate-skipping: everything is discovered (read 100%)
-            # yet Uploaded no longer moves → immich-go is skipping duplicates.
-            if read_pct >= 100 and new_up == self.cur["uploaded"]:
-                self._stall += 1
-            else:
-                self._stall = 0
-            self.cur["read_pct"] = read_pct
-            self.cur["found"] = int(m.group(2))
-            self.cur["errors"] = int(m.group(3))
-            self.cur["uploaded"] = new_up
+            self.read_pct = int(m.group(1))
+            if self.read_pct < 100:
+                self.index_partial = True
+            elif self.index_partial:
+                self.index_done = True
+            self.found = int(m.group(2))
+            self.live_errors = int(m.group(3))
+            self.live_uploaded = int(m.group(4))
             return
         rl = _RE_REPORT.match(line)
         if rl:
-            label = rl.group(1).lower()
-            val = int(rl.group(2))
-            for needle, key in _REPORT_LABELS:
-                if needle in label:
-                    if key == "errors":
-                        self.rep["errors"] = self.rep.get("errors", 0) + val
-                    else:
-                        self.rep[key] = val
-                    break
+            label = rl.group(1).strip().lower()
+            if label in _EVENT_KEYS:
+                self.rep_raw[label] = int(rl.group(2))
 
-    def finalize(self) -> None:
-        self._fold()
+    def event(self, rec: dict) -> None:
+        msg = str(rec.get("msg") or "")
+        key = _EVENT_KEYS.get(msg)
+        if key:
+            self.ev[key] += 1
+            self.live_events = True
+        elif msg.startswith("Assets on the server"):
+            self.index_done = True
+        elif msg == "got album from the server":
+            self.albums_read += 1
+
+    def _counts(self) -> dict:
+        if self.live_events:
+            return dict(self.ev)
+        c = dict.fromkeys(_COUNTERS, 0)
+        if self.rep_raw:
+            for label, val in self.rep_raw.items():
+                c[_EVENT_KEYS[label]] += val
+        else:
+            c["uploaded"] = self.live_uploaded
+            c["errors"] = self.live_errors
+        return c
 
     def as_dict(self) -> dict:
-        # Virtually fold the currently-open folder (preferring its final-report
-        # values, falling back to the live line) WITHOUT mutating state, so a
-        # snapshot taken at any instant — including a terminal one read before
-        # finalize() runs — always reflects correct totals.
-        eff = dict(self.cum)
-        dups_estimated = False
-        if self.folder_open:
-            up = self.rep.get("uploaded", self.cur["uploaded"])
-            upg = self.rep.get("upgraded", 0)
-            uns = self.rep.get("unsupported", 0)
-            err = self.rep.get("errors", self.cur["errors"])
-            found_cur = self.cur["found"]
-            if self.rep:
-                # Folder report emitted → exact reconciliation.
-                sdup, ldup = self._reconcile_dups(
-                    found_cur, up, err, upg, uns,
-                    self.rep.get("server_dup", 0), self.rep.get("local_dup", 0))
-            elif self.cur["read_pct"] >= 100 and self._stall >= 3:
-                # Everything discovered and uploads stalled → the pending assets
-                # are being skipped as duplicates. Estimate live; the exact
-                # count firms up from the report at folder close.
-                sdup, ldup = self._reconcile_dups(found_cur, up, err, upg, uns, 0, 0)
-                dups_estimated = (sdup + ldup) > 0
-            else:
-                # Still discovering / actively uploading: pending assets are not
-                # classified yet — don't guess (that would fake duplicates).
-                sdup, ldup = 0, 0
-            eff["uploaded"] += up
-            eff["upgraded"] += upg
-            eff["unsupported"] += uns
-            eff["errors"] += err
-            eff["server_dup"] += sdup
-            eff["local_dup"] += ldup
-            eff["found"] += found_cur
-            for key in ("disc_banned", "disc_unknown", "disc_unsupported"):
-                eff[key] += self.rep.get(key, 0)
-        found = eff["found"]
-        uploaded = eff["uploaded"]
-        errors = eff["errors"]
-        dups = eff["server_dup"] + eff["local_dup"]
-        unsupported = eff["unsupported"]
-        upgraded = eff["upgraded"]
-        processed = uploaded + errors + dups + unsupported + upgraded
-        remaining = max(found - processed, 0)
-        pct = min(100, round(processed / found * 100)) if found > 0 else 0
+        c = self._counts()
+        dups = c["server_dup"] + c["local_dup"]
+        processed = (c["uploaded"] + c["upgraded"] + dups + c["unsupported"]
+                     + c["filtered"] + c["errors"])
+        # The tree's count is known up-front; immich-go's "found" grows as it
+        # discovers files. Whichever is larger is the honest target.
+        target = max(self.expected, self.found)
+        remaining = max(target - processed, 0)
+        pct = min(100, round(processed / target * 100)) if target > 0 else 0
+        if processed == 0 and not self.index_done:
+            phase = "index"
+        elif processed == 0:
+            phase = "albums"
+        else:
+            phase = "upload"
+        disc = c["disc_banned"] + c["disc_unknown"] + c["disc_unsupported"]
         return {
-            "found": found, "uploaded": uploaded, "errors": errors,
-            "dups": dups, "serverDup": eff["server_dup"],
-            "localDup": eff["local_dup"], "upgraded": upgraded,
-            "unsupported": unsupported, "processed": processed,
-            "remaining": remaining, "readPct": self.cur["read_pct"], "pct": pct,
-            "dupsEstimated": dups_estimated,
+            "found": self.found, "expected": self.expected, "target": target,
+            "uploaded": c["uploaded"], "errors": c["errors"],
+            "dups": dups, "serverDup": c["server_dup"],
+            "localDup": c["local_dup"], "upgraded": c["upgraded"],
+            "unsupported": c["unsupported"], "filtered": c["filtered"],
+            "processed": processed, "remaining": remaining, "pct": pct,
+            "phase": phase,
+            "readPct": self.read_pct if self.index_partial else 0,
+            "albumsRead": self.albums_read,
             # Scan-side exclusions: files immich-go saw on disk and dropped
-            # before any upload was attempted. They are exactly the difference
-            # between what the tree announces and what "found" ever reaches.
-            "discBanned": eff["disc_banned"],
-            "discUnknown": eff["disc_unknown"],
-            "discUnsupported": eff["disc_unsupported"],
-            "discSkipped": (eff["disc_banned"] + eff["disc_unknown"]
-                            + eff["disc_unsupported"]),
+            # before any upload was attempted.
+            "discBanned": c["disc_banned"],
+            "discUnknown": c["disc_unknown"],
+            "discUnsupported": c["disc_unsupported"],
+            "discSkipped": disc,
             "currentFolder": self.current_folder,
         }
 
@@ -269,11 +236,13 @@ class Job:
     dry_run: bool = False
     logs: list[str] = field(default_factory=list)
     log_total: int = 0
-    # Per-file failures, extracted from immich-go's JSON log (see _collect_errors).
+    # Per-file failures, extracted from immich-go's JSON log (see _record_error).
     errors: list[dict] = field(default_factory=list)
     errors_total: int = 0
     # File-less problems, deduplicated: {key: {kind, detail, count}}
     issues: dict = field(default_factory=dict)
+    # Failed files per selected folder, to tell which folders are incomplete.
+    folder_errors: dict = field(default_factory=dict)
     progress: Progress = field(default_factory=Progress)
     return_code: int | None = None
     started_at: float = field(default_factory=time.time)
@@ -282,7 +251,9 @@ class Job:
     _proc: subprocess.Popen | None = field(default=None, repr=False)
     _cancel: bool = False
     _interrupted: bool = False
-    _current_abs: str | None = field(default=None, repr=False)
+    _stop_sent: bool = False
+    _file_errors_only: bool = False
+    _current_roots: list = field(default_factory=list, repr=False)
     _run_seq: int = field(default=0, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
 
@@ -316,9 +287,9 @@ class Job:
                 del self.logs[0:len(self.logs) - _LOG_KEEP]
             self.progress.feed(clean)
 
-    def finalize_progress(self) -> None:
+    def on_event(self, rec: dict) -> None:
         with self._lock:
-            self.progress.finalize()
+            self.progress.event(rec)
 
     def _progress_dict(self) -> dict:
         done = sum(1 for f in self.folders if f.status == "done")
@@ -419,6 +390,10 @@ class JobManager:
     def _is_running(self) -> bool:
         return bool(self._active and self._jobs[self._active].status == "running")
 
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._is_running()
+
     # -- start / resume -----------------------------------------------------
     def start(self, paths: list[str], dry_run: bool = False) -> Job:
         """Start a fresh import over the (deduped) selection, discarding any
@@ -479,7 +454,7 @@ class JobManager:
 
     def resumable(self) -> dict | None:
         """Describe a persisted interrupted import for the resume prompt, or None."""
-        if self._is_running():
+        if self.is_running():
             return None
         persisted = state.load_current()
         if not persisted or not self._is_resumable(persisted):
@@ -499,7 +474,7 @@ class JobManager:
         }
 
     def discard_resumable(self) -> bool:
-        if self._is_running():
+        if self.is_running():
             return False
         state.clear_current()
         return True
@@ -509,14 +484,44 @@ class JobManager:
         if not job or job.status != "running":
             return False
         job._cancel = True
-        proc = job._proc
-        if proc and proc.poll() is None:
-            proc.terminate()
+        self._stop_proc(job)
         return True
 
+    def _stop_proc(self, job: Job) -> None:
+        """Ask immich-go to stop the way it expects: SIGINT (Ctrl+C).
+
+        immich-go pauses Immich's background jobs (thumbnails, metadata, video
+        conversion, faces, smart search) for the duration of the upload and
+        batches album additions. Only its SIGINT handler runs the shutdown that
+        resumes those jobs and flushes the albums — SIGTERM kills it on the
+        spot, leaving the server's jobs paused and recent photos out of their
+        album. It is killed only if it ignores the request for too long.
+        """
+        proc = job._proc
+        if not proc or proc.poll() is not None or job._stop_sent:
+            return
+        job._stop_sent = True
+        job.log("[info] Arrêt d'immich-go en cours (reprise des tâches Immich, "
+                "enregistrement des albums)…")
+        try:
+            proc.send_signal(signal.SIGINT)
+        except OSError:
+            return
+
+        def _reap() -> None:
+            try:
+                proc.wait(timeout=_STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                job.log("[warn] immich-go ne répond pas : arrêt forcé. Vérifie "
+                        "dans Immich (Administration > Tâches) qu'aucune tâche "
+                        "n'est restée en pause.")
+                proc.kill()
+
+        threading.Thread(target=_reap, daemon=True).start()
+
     # -- command building ---------------------------------------------------
-    def _build_cmd(self, job: Job, abs_path: str,
-                   log_file: str | None = None) -> list[str]:
+    def _build_cmd(self, job: Job, abs_paths: list[str], log_file: str,
+                   log_level: str) -> list[str]:
         album = settings.album_mode()
         cmd = [
             config.IMMICH_GO_BIN, "upload", "from-folder",
@@ -541,17 +546,15 @@ class JobManager:
             cmd.append(f"--folder-as-album={album}")
         if job.dry_run and "--dry-run" not in config.IMMICH_GO_EXTRA_ARGS:
             cmd.append("--dry-run")
-        if log_file:
-            # immich-go writes its per-file events to a LOG FILE, never to
-            # stdout — which is why a failed upload used to be invisible here,
-            # leaving "9 errors" with no way to know which files. JSON so it can
-            # be parsed exactly; ERROR level so a 250 000-file import doesn't
-            # write a gigabyte of INFO lines we would never read.
-            cmd.extend(["--log-file", log_file,
-                        "--log-type", "JSON",
-                        "--log-level", "ERROR"])
+        # immich-go writes its per-file events to a LOG FILE, never to stdout.
+        # JSON so it can be parsed exactly. INFO when it goes to the live event
+        # pipe (nothing hits the disk); ERROR when it is a plain file, so a
+        # 250 000-file import doesn't write a gigabyte of INFO lines.
+        cmd.extend(["--log-file", log_file,
+                    "--log-type", "JSON",
+                    "--log-level", log_level])
         cmd.extend(config.IMMICH_GO_EXTRA_ARGS)
-        cmd.append(abs_path)
+        cmd.extend(abs_paths)
         return cmd
 
     @staticmethod
@@ -573,21 +576,62 @@ class JobManager:
             shutil.rmtree(old, ignore_errors=True)
 
     @staticmethod
-    def _resolve_logged_file(raw: str, abs_path: str) -> tuple[str, str]:
-        """Turn immich-go's "<fsname>:<relative>" into (absolute, relative).
+    def _open_event_pipe(path) -> tuple[int, int] | None:
+        """Create the FIFO immich-go will use as its log file.
 
-        immich-go names its filesystem after the base directory it was pointed
-        at (``fshelper.NewFSWithName``), so "Photos:2020/img.jpg" means
-        <abs_path>/2020/img.jpg when abs_path ends with "Photos". Anything that
-        doesn't fit that shape is passed through untouched rather than guessed.
+        Returns (read_fd, keeper_write_fd), or None when FIFOs are unavailable
+        (the caller then falls back to a plain ERROR-level log file). The
+        keeper write end stays open until immich-go has exited, so the reader
+        never sees a premature end-of-file — and is never left blocked if
+        immich-go dies before opening its log.
+        """
+        if not hasattr(os, "mkfifo"):
+            return None
+        try:
+            if os.path.lexists(path):
+                os.unlink(path)
+            os.mkfifo(path, 0o600)
+            rfd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                wfd = os.open(path, os.O_WRONLY)
+            except OSError:
+                os.close(rfd)
+                raise
+            os.set_blocking(rfd, True)
+            return rfd, wfd
+        except OSError as exc:
+            log.warning("event pipe unavailable (%s) — falling back to a log "
+                        "file; duplicates will only be counted at the end", exc)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return None
+
+    @staticmethod
+    def _resolve_logged_file(raw: str, roots: list[tuple[str, str]]
+                             ) -> tuple[str, str | None]:
+        """Turn immich-go's "<fsname>:<relative>" into (absolute, folder).
+
+        immich-go names each filesystem after the base directory it was
+        pointed at, so "Photos:2020/img.jpg" means <root>/2020/img.jpg for the
+        selected root ending with "Photos". Two selected folders can share a
+        name; the file's existence then decides. Anything that doesn't fit is
+        passed through untouched rather than guessed.
         """
         raw = (raw or "").replace("\\", "/")
         head, sep, tail = raw.partition(":")
-        if sep and head == os.path.basename(abs_path.rstrip("/")):
-            return os.path.join(abs_path, tail), tail
-        if sep and not os.path.isabs(raw):
-            return os.path.join(abs_path, tail), tail
-        return raw, raw
+        if not sep:
+            return raw, None
+        matches = [(rel, ab) for rel, ab in roots
+                   if os.path.basename(ab.rstrip("/")) == head]
+        if not matches and len(roots) == 1 and not os.path.isabs(raw):
+            matches = roots
+        for rel, ab in matches:
+            full = os.path.join(ab, tail)
+            if len(matches) == 1 or os.path.exists(full):
+                return full, rel
+        return raw, None
 
     @staticmethod
     def _error_detail(rec: dict) -> str:
@@ -607,8 +651,9 @@ class JobManager:
                  if k not in _META_KEYS and not isinstance(v, (dict, list))]
         return ", ".join(extra)
 
-    def _collect_errors(self, job: Job, log_file, abs_path: str) -> int:
-        """Read back immich-go's JSON log and record every failure it reports.
+    def _record_error(self, job: Job, rec: dict,
+                      roots: list[tuple[str, str]]) -> bool:
+        """Record one ERROR-level log record. Returns True for a file error.
 
         Two shapes come out of that log and they must not be mixed:
 
@@ -620,75 +665,119 @@ class JobManager:
 
         ``context canceled`` is dropped outright: when an upload dies, every
         pending transfer reports it, and immich-go filters that same noise out
-        of its own output. Keeping it would bury the eight real failures under a
-        hundred meaningless lines — which is exactly what it did.
+        of its own output.
 
         Sizes are stat'ed here, while the disk is still mounted: immich-go logs
         the file and the error but not the size, and the recap is read long
         after the run.
         """
-        found = 0
+        kind = str(rec.get("msg") or "")
+        detail = self._error_detail(rec)
+        if "context canceled" in (kind + " " + detail).lower():
+            return False
+        if kind.startswith(_FILE_ERRORS_ONLY):
+            # The run's closing summary, not a problem of its own.
+            job._file_errors_only = True
+            return False
+
+        raw = rec.get("file")
+        if isinstance(raw, dict):  # assets.Asset logs a group
+            raw = raw.get("FileName") or raw.get("OriginalFileName") or ""
+        if not isinstance(raw, str):
+            raw = ""
+
+        if not raw:
+            # No file: a general problem. Fold identical ones together.
+            key = f"{kind}\n{detail}"
+            with job._lock:
+                entry = job.issues.get(key)
+                if entry:
+                    entry["count"] += 1
+                elif len(job.issues) < _ISSUE_KEEP:
+                    job.issues[key] = {"kind": kind, "detail": detail,
+                                       "count": 1}
+            return False
+
+        full, folder = self._resolve_logged_file(raw, roots)
+        rel = raw
+        if folder is not None:
+            try:
+                rel = os.path.relpath(full, config.IMPORT_ROOT).replace("\\", "/")
+            except ValueError:
+                rel = full
+        size = None
+        try:
+            size = os.path.getsize(full)
+        except OSError:
+            pass
+        with job._lock:
+            job.errors_total += 1
+            if folder is not None:
+                job.folder_errors[folder] = job.folder_errors.get(folder, 0) + 1
+            if len(job.errors) < _ERR_KEEP:
+                job.errors.append({
+                    "name": os.path.basename(rel) or rel,
+                    "path": rel,
+                    "size": size,
+                    "kind": kind,
+                    "detail": detail,
+                    "time": rec.get("time") or "",
+                })
+        return True
+
+    @staticmethod
+    def _parse_record(line: str) -> dict | None:
+        line = line.strip()
+        if not line.startswith("{"):
+            return None
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            return None
+        return rec if isinstance(rec, dict) else None
+
+    def _read_events(self, job: Job, rfd: int, keep_file,
+                     roots: list[tuple[str, str]]) -> None:
+        """Drain immich-go's live JSON log. It must never stop reading: a full
+        pipe would block immich-go itself, so every record is handled in its
+        own try."""
+        try:
+            keep = open(keep_file, "a", encoding="utf-8")
+        except OSError:
+            keep = None
+        try:
+            with os.fdopen(rfd, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        rec = self._parse_record(line)
+                        if rec is None:
+                            continue
+                        job.on_event(rec)
+                        if str(rec.get("level", "")).upper() == "ERROR":
+                            if keep:
+                                keep.write(line.strip() + "\n")
+                            self._record_error(job, rec, roots)
+                    except Exception:  # noqa: BLE001 - keep draining
+                        log.exception("job=%s bad event record", job.id)
+        except Exception:  # noqa: BLE001
+            log.exception("job=%s event reader crashed", job.id)
+        finally:
+            if keep:
+                keep.close()
+
+    def _collect_errors(self, job: Job, log_file,
+                        roots: list[tuple[str, str]]) -> None:
+        """Fallback without the event pipe: read the ERROR log back after the
+        run."""
         try:
             fh = open(log_file, encoding="utf-8", errors="replace")
         except OSError:
-            return 0
+            return
         with fh:
             for line in fh:
-                line = line.strip()
-                if not line or not line.startswith("{"):
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if str(rec.get("level", "")).upper() != "ERROR":
-                    continue
-
-                kind = str(rec.get("msg") or "")
-                detail = self._error_detail(rec)
-                if "context canceled" in (kind + " " + detail).lower():
-                    continue
-
-                raw = rec.get("file")
-                if isinstance(raw, dict):  # assets.Asset logs a group
-                    raw = raw.get("FileName") or raw.get("OriginalFileName") or ""
-                if not isinstance(raw, str):
-                    raw = ""
-
-                if not raw:
-                    # No file: a general problem. Fold identical ones together.
-                    key = f"{kind}\n{detail}"
-                    with job._lock:
-                        entry = job.issues.get(key)
-                        if entry:
-                            entry["count"] += 1
-                        elif len(job.issues) < _ISSUE_KEEP:
-                            job.issues[key] = {"kind": kind, "detail": detail,
-                                               "count": 1}
-                    continue
-
-                full, rel = self._resolve_logged_file(raw, abs_path)
-                size = None
-                try:
-                    size = os.path.getsize(full)
-                except OSError:
-                    pass
-                found += 1
-                with job._lock:
-                    job.errors_total += 1
-                    if len(job.errors) < _ERR_KEEP:
-                        job.errors.append({
-                            "name": os.path.basename(rel) or rel,
-                            "path": rel,
-                            "size": size,
-                            "kind": kind,
-                            "detail": detail,
-                            "time": rec.get("time") or "",
-                        })
-        if found:
-            log.warning("job=%s %d file error(s) in '%s' — details in %s",
-                        job.id, found, abs_path, log_file)
-        return found
+                rec = self._parse_record(line)
+                if rec and str(rec.get("level", "")).upper() == "ERROR":
+                    self._record_error(job, rec, roots)
 
     @staticmethod
     def _redacted(cmd: list[str]) -> str:
@@ -711,11 +800,11 @@ class JobManager:
         while not job._done.wait(config.DISK_MONITOR_INTERVAL):
             if job._cancel or job._interrupted:
                 return
-            current = job._current_abs
-            # Only meaningful while a folder is actively being imported.
+            current = list(job._current_roots)
+            # Only meaningful while immich-go is actually running.
             if not current:
                 continue
-            gone = not os.path.exists(current)
+            gone = any(not os.path.exists(p) for p in current)
             if not gone:
                 # Fallback: the whole root went empty (parent unmounted).
                 try:
@@ -726,10 +815,24 @@ class JobManager:
                 job._interrupted = True
                 job.log("[warn] Disque débranché — interruption de l'import. "
                         "Rebranche le disque pour reprendre.")
-                proc = job._proc
-                if proc and proc.poll() is None:
-                    proc.terminate()
+                self._stop_proc(job)
                 return
+
+    def _compute_expected(self, job: Job, paths: list[str]) -> None:
+        """Count, from the tree, the assets this run is about to import.
+
+        Runs alongside immich-go's index download (a network phase), and the
+        counts are usually already cached from browsing the tree.
+        """
+        total = 0
+        for p in paths:
+            try:
+                d = fs.recursive_count(p)
+                total += d["photos"] + d["videos"]
+            except Exception:  # noqa: BLE001 - one bad folder must not hide the rest
+                log.debug("job=%s count failed for %r", job.id, p)
+        with job._lock:
+            job.progress.expected = total
 
     # -- run ----------------------------------------------------------------
     def _run(self, job: Job, resuming: bool = False) -> None:
@@ -751,50 +854,33 @@ class JobManager:
                         "n'enverra AUCUN fichier, aucune modification dans Immich.")
             job.log(f"[info] Starting import of {len(todo)} folder(s).")
 
-            failed = 0
-            for folder in job.folders:
-                if folder.status == "done":
-                    continue  # resume: skip completed folders
-                if job._cancel:
-                    job.log("[warn] Cancelled by user.")
-                    job.status = "cancelled"
-                    return
-                if job._interrupted:
-                    break
-
+            runnable: list[tuple[Folder, str]] = []
+            for folder in todo:
                 try:
                     abs_path = str(fs.safe_resolve(folder.path))
                 except fs.UnsafePathError as exc:
                     job.log(f"[error] Skipping unsafe path {folder.path!r}: {exc}")
                     folder.status = "failed"
-                    failed += 1
-                    job.persist()
                     continue
-
                 # Guard: the folder must actually be present (disk plugged in).
                 if not os.path.exists(abs_path):
                     job._interrupted = True
                     job.log(f"[warn] Dossier introuvable (disque absent ?) : "
                             f"'{folder.path or '<root>'}'. Import interrompu.")
                     break
+                runnable.append((folder, abs_path))
 
-                label = folder.path or "<root>"
-                folder.status = "running"
+            if runnable and not job._interrupted and not job._cancel:
+                for folder, _ in runnable:
+                    folder.status = "running"
                 job.persist()
+                threading.Thread(target=self._compute_expected,
+                                 args=(job, [f.path for f, _ in runnable]),
+                                 daemon=True).start()
+                label = " · ".join(f.path or "<root>" for f, _ in runnable)
                 job.log(f"\n[info] === Importing '{label}' ===")
-                rc = self._run_one(job, abs_path)
-
-                if job._interrupted:
-                    folder.status = "interrupted"
-                    job.persist()
-                    break
-                if rc != 0:
-                    folder.status = "failed"
-                    failed += 1
-                    job.log(f"[error] immich-go exited with code {rc} for '{label}'.")
-                else:
-                    folder.status = "done"
-                    job.log(f"[ok] Finished '{label}'.")
+                rc = self._run_immich_go(job, runnable)
+                self._settle_folders(job, runnable, rc)
                 job.persist()
 
             if job._interrupted:
@@ -802,8 +888,12 @@ class JobManager:
                 remaining = sum(1 for f in job.folders if f.status != "done")
                 job.log(f"\n[warn] Import interrompu. {remaining} dossier(s) "
                         f"restant(s) — rebranche le disque pour reprendre.")
+            elif job._cancel:
+                job.log("[warn] Cancelled by user.")
+                job.status = "cancelled"
             else:
                 done = sum(1 for f in job.folders if f.status == "done")
+                failed = sum(1 for f in job.folders if f.status == "failed")
                 job.return_code = 1 if failed else 0
                 job.status = "error" if failed else "success"
                 job.log(f"\n[info] Done. {done}/{len(job.folders)} folder(s) succeeded.")
@@ -813,8 +903,7 @@ class JobManager:
         finally:
             job.ended_at = time.time()
             job._done.set()
-            job._current_abs = None
-            job.finalize_progress()  # fold the last folder's report into totals
+            job._current_roots = []
             prog = job.progress.as_dict()
             log.info(
                 "job=%s end status=%s found=%d uploaded=%d dups=%d errors=%d "
@@ -828,38 +917,100 @@ class JobManager:
             if job.status in ("success", "cancelled"):
                 state.clear_current()
 
-    def _run_one(self, job: Job, abs_path: str) -> int:
+    def _settle_folders(self, job: Job, runnable: list[tuple[Folder, str]],
+                        rc: int) -> None:
+        """Give each folder of the run its final status.
+
+        With --on-errors=continue, immich-go goes to the end and still exits
+        non-zero when any file failed. Only the folders holding those files are
+        then incomplete; a non-zero exit for any other reason means the run
+        itself broke, and every folder must be re-run.
+        """
+        folders = [f for f, _ in runnable]
+        if job._interrupted:
+            new = {f.path: "interrupted" for f in folders}
+        elif job._cancel:
+            new = {f.path: "cancelled" for f in folders}
+        elif rc == 0:
+            new = {f.path: "done" for f in folders}
+        elif job._file_errors_only and any(job.folder_errors.get(f.path)
+                                           for f in folders):
+            new = {f.path: ("failed" if job.folder_errors.get(f.path) else "done")
+                   for f in folders}
+        else:
+            new = {f.path: "failed" for f in folders}
+            job.log(f"[error] immich-go exited with code {rc}.")
+        for f in folders:
+            f.status = new[f.path]
+            label = f.path or "<root>"
+            if f.status == "done":
+                job.log(f"[ok] Finished '{label}'.")
+            elif f.status == "failed" and job.folder_errors.get(f.path):
+                job.log(f"[warn] '{label}' : {job.folder_errors[f.path]} "
+                        f"fichier(s) en erreur.")
+
+    def _run_immich_go(self, job: Job, runnable: list[tuple[Folder, str]]) -> int:
         job._run_seq += 1
-        log_file = self._job_log_dir(job) / f"{job._run_seq:03d}.jsonl"
-        cmd = self._build_cmd(job, abs_path, str(log_file))
+        log_dir = self._job_log_dir(job)
+        keep_file = log_dir / f"{job._run_seq:03d}.jsonl"
+        pipe_path = log_dir / f"{job._run_seq:03d}.pipe"
+        roots = [(f.path, ab) for f, ab in runnable]
+        abs_paths = [ab for _, ab in runnable]
+
+        pipe = self._open_event_pipe(pipe_path)
+        if pipe:
+            cmd = self._build_cmd(job, abs_paths, str(pipe_path), "INFO")
+        else:
+            cmd = self._build_cmd(job, abs_paths, str(keep_file), "ERROR")
         job.log(f"[cmd] {self._redacted(cmd)}")
+
+        reader = None
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError:
-            job.log(f"[error] immich-go binary not found at {config.IMMICH_GO_BIN}")
-            return 127
-        job._proc = proc
-        job._current_abs = abs_path
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            job.log(line)
-            if (job._cancel or job._interrupted) and proc.poll() is None:
-                proc.terminate()
-        proc.wait()
-        job._proc = None
-        # Parse the errors BEFORE clearing _current_abs: the disk must still be
-        # mounted to stat the failed files.
-        n = self._collect_errors(job, log_file, abs_path)
-        if n:
-            job.log(f"[warn] {n} fichier(s) en erreur — détail dans le récapitulatif.")
-        job._current_abs = None
-        return proc.returncode
+            if pipe:
+                reader = threading.Thread(target=self._read_events,
+                                          args=(job, pipe[0], keep_file, roots),
+                                          daemon=True)
+                reader.start()
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+            except FileNotFoundError:
+                job.log(f"[error] immich-go binary not found at {config.IMMICH_GO_BIN}")
+                return 127
+            job._proc = proc
+            job._current_roots = abs_paths
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                job.log(line)
+                if _FILE_ERRORS_ONLY in line:
+                    job._file_errors_only = True
+                if job._cancel or job._interrupted:
+                    self._stop_proc(job)
+            proc.wait()
+            return proc.returncode
+        finally:
+            if pipe:
+                os.close(pipe[1])  # immich-go is gone: let the reader hit EOF
+                if reader:
+                    reader.join(timeout=30)
+                try:
+                    os.unlink(pipe_path)
+                except OSError:
+                    pass
+            else:
+                # Before clearing _current_roots: the disk must still be
+                # mounted to stat the failed files.
+                self._collect_errors(job, keep_file, roots)
+            job._proc = None
+            job._current_roots = []
+            if job.errors_total:
+                job.log(f"[warn] {job.errors_total} fichier(s) en erreur — "
+                        f"détail dans le récapitulatif.")
 
 
 manager = JobManager()

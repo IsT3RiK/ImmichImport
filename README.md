@@ -142,6 +142,11 @@ Pour une clé au périmètre minimal :
 | `asset.read`   | Éviter de renvoyer un fichier déjà présent | conseillé |
 | `album.create` | Créer un album par dossier                 | conseillé |
 | `album.read`   | Retrouver les albums existants             | conseillé |
+| `job.create`   | Mettre en pause les tâches Immich pendant l'import | requis (compte **administrateur**) |
+
+`immich-go` suspend les tâches de fond d'Immich (miniatures, métadonnées,
+reconnaissance…) le temps de l'envoi et refuse de démarrer s'il ne peut pas : la
+clé doit donc appartenir à un compte administrateur. L'assistant le vérifie.
 
 La clé ne quitte jamais le serveur : le navigateur ne la voit pas.
 
@@ -178,8 +183,14 @@ Le disque est monté **en lecture seule** : vos fichiers sources ne peuvent pas
 4. **Importer la sélection** — les compteurs et le temps restant s'affichent en
    direct. **Annuler l'import** stoppe proprement.
 
-Pendant le transfert : avancement global, temps restant, cadence, et le détail
-dossier par dossier (✅ terminé, ⏳ en cours, • en attente). À la fin, un
+Tous les dossiers cochés partent en **un seul passage** d'`immich-go`. Avant le
+premier envoi, il lit l'index complet de votre serveur Immich puis ses albums
+(« Lecture de l'index Immich », « Lecture des albums ») : sur une grosse
+photothèque, cette étape peut prendre quelques minutes, une seule fois.
+
+Pendant le transfert : avancement global, envois, doublons et erreurs comptés en
+direct, temps restant, cadence, et l'état de chaque dossier (✅ terminé,
+⏳ en cours, ❌ fichiers en erreur, ⏹ annulé). À la fin, un
 récapitulatif indique ce qui est parti, ce qui a été ignoré parce que déjà
 présent, les erreurs éventuelles et la durée — voir l'[aperçu](#aperçu).
 
@@ -191,8 +202,8 @@ l'affichage se raccroche automatiquement à l'import en cours.
 Si le disque disparaît en cours d'import, le job s'arrête et la progression est
 sauvegardée. Au rebranchement, un bandeau propose :
 
-- **Reprendre** — ne retraite que les dossiers non terminés. Pour un dossier
-  laissé à moitié, `immich-go` saute les fichiers déjà envoyés.
+- **Reprendre** — relance les dossiers non terminés ; `immich-go` saute les
+  fichiers déjà envoyés.
 - **Recommencer à zéro** — oublie l'état et repart d'une nouvelle sélection.
 
 ---
